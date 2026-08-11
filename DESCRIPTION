@@ -1,9 +1,9 @@
 Package: cori.data.s3
-Title: CORI functions used by cori.data.* packages to connect to S3
+Title: CORI Data S3
 Version: 1.0.0
 Author: John Hall
 Maintainer: John Hall <john.hall@ruralinnovation.us>
-Description: Commonly used data sets and data functions.
+Description: CORI functions used by cori.data.* packages to connect to S3.
 Encoding: UTF-8
 License: file LICENSE
 LazyData: true
