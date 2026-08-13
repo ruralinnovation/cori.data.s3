@@ -1,0 +1,26 @@
+url: https://ruralinnovation.github.io/cori.data.s3
+
+template:
+  bootstrap: 5
+
+reference:
+- title: Connection
+  desc: Establish S3 connections with credential handling
+  contents:
+  - connect_to_s3
+  - has_local_aws_credentials
+  - set_aws_credentials
+
+- title: Read Operations
+  contents:
+  - get_s3_object
+  - read_s3_object
+  - list_s3_objects
+  - list_s3_buckets
+  - sync_s3_to_local
+
+- title: Write Operations
+  contents:
+  - write_s3_object
+  - put_s3_object
+  - put_s3_objects_recursive

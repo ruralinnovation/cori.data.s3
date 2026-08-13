@@ -6,6 +6,7 @@ Maintainer: John Hall <john.hall@ruralinnovation.us>
 Description: CORI functions used by cori.data.* packages to connect to S3.
 Encoding: UTF-8
 License: file LICENSE
+URL: https://ruralinnovation.github.io/cori.data.s3
 LazyData: true
 Imports:
   cli,
