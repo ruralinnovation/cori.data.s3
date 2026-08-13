@@ -1,0 +1,19 @@
+<urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/404.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/LICENSE-text.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/authors.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/index.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/connect_to_s3.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/get_s3_object.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/has_local_aws_credentials.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/index.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/list_s3_buckets.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/list_s3_objects.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/put_s3_object.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/put_s3_objects_recursive.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/read_s3_object.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/set_aws_credentials.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/sync_s3_to_local.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/write_s3_object.html</loc></url>
+</urlset>
+
