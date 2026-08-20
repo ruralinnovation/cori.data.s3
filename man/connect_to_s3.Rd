@@ -9,7 +9,8 @@ connect_to_s3(
   region = "us-east-1",
   vending_url = default_vending_url(),
   require_local = FALSE,
-  dbdir = ":memory:"
+  dbdir = ":memory:",
+  caller = Sys.getenv("USER")
 )
 }
 \arguments{
@@ -32,6 +33,14 @@ Default: \code{FALSE}.}
 \code{":memory:"} opens an in-memory instance, matching prior behavior. Pass
 a file path for callers that need the catalog/temp state to persist
 across a script run.}
+
+\item{caller}{Character. Identifies this connection in the vending
+endpoint's session name and, downstream, in S3 server access log
+reports (CLOSE_THE_GAP.md) -- without it every vended credential
+attributes to \code{anon}. Only used on the vending path; ignored when local
+credentials are present. Default: \code{Sys.getenv("USER")}, a stable,
+non-identifying value (a system username, not personal data). Pass
+e.g. a calling package name for finer-grained attribution.}
 }
 \value{
 An open \code{duckdb_connection}. The caller owns the connection and

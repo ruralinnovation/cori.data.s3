@@ -1,0 +1,182 @@
+---
+title: "Monitoring S3 access"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Monitoring S3 Access}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse   = TRUE,
+  comment    = "#>",
+  dpi        = 300,
+  fig.width  = 12,
+  fig.height = 6,
+  message    = FALSE,
+  warning    = FALSE,
+  eval       = FALSE
+)
+```
+
+Every request to a CORI data bucket is written to an S3 server access log.
+This vignette turns those logs into charts: who is downloading what, from
+which bucket, and how that changes over time.
+
+Chunks are set `eval = FALSE` because rendering them queries several months
+of live log data. Run them interactively against a real window.
+
+## Where the logs live
+
+Server access logging is enabled on every allowlisted bucket except
+`cori.data.verse`, which is the destination. Log objects land under a
+date-partitioned prefix that encodes both the source bucket and the day:
+
+```
+s3://cori.data.verse/logs/312512371189/us-east-1/<bucket>/YYYY/MM/DD/<file>
+```
+
+That layout matters for performance. Narrowing the glob to the months you
+care about is what keeps a query reading megabytes instead of the full
+history — there are hundreds of thousands of small log objects.
+
+```{r libraries}
+library(cori.data.s3)
+library(cori.charts)
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+load_fonts()
+```
+
+## Reading the logs
+
+Access logs are space-delimited with a bracketed timestamp and a quoted
+request URI, so they are parsed with a single regular expression rather
+than a CSV reader. The important discipline is to aggregate inside DuckDB
+and return only a small summary to R — never pull raw log lines into
+memory.
+
+```{r read}
+con <- connect_to_s3("cori.data.verse")
+on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+# Widen or narrow this glob to set the reporting window.
+glob <- "s3://cori.data.verse/logs/312512371189/us-east-1/*/2026/*/*/*"
+
+log_pattern <- paste0(
+  "^(\\S+) (\\S+) \\[([^\\]]+)\\] (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) ",
+  "\"[^\"]*\" (\\S+) (\\S+) (\\S+)"
+)
+
+activity <- DBI::dbGetQuery(con, sprintf("
+  WITH raw AS (
+    SELECT regexp_extract(line, '%s',
+      ['owner','bucket','ts','ip','requester','reqid',
+       'operation','key','status','err','bytes']) AS f
+    FROM read_csv('%s', delim='\\x01', header = false,
+                  columns = {'line': 'VARCHAR'})
+  )
+  SELECT
+    f.bucket                                                   AS bucket,
+    CAST(strptime(split_part(f.ts, ' ', 1),
+                  '%%d/%%b/%%Y:%%H:%%M:%%S') AS DATE)          AS day,
+    CASE
+      WHEN f.requester = '-' THEN 'anonymous'
+      WHEN f.requester LIKE '%%CoriDataS3ReaderRole%%'
+        THEN coalesce(nullif(regexp_extract(
+               split_part(f.requester, '/', 3),
+               '^coridata-(.*)-[0-9]+$', 1), ''), 'anon')
+      ELSE 'local credentials'
+    END                                                        AS caller,
+    COUNT(*)                                                   AS requests,
+    SUM(TRY_CAST(f.bytes AS BIGINT))                           AS bytes
+  FROM raw
+  WHERE f.operation LIKE 'REST.GET.OBJECT%%'
+  GROUP BY 1, 2, 3
+", log_pattern, glob))
+
+glimpse(activity)
+```
+
+One row per bucket, day, and caller. Everything below is `dplyr` on that
+frame — the expensive work is already done.
+
+## Downloads over time, by bucket
+
+```{r chart-by-bucket}
+activity |>
+  group_by(bucket, day) |>
+  summarise(requests = sum(requests), .groups = "drop") |>
+  ggplot(aes(day, requests, color = bucket)) +
+  geom_line(linewidth = 0.8) +
+  scale_y_continuous(labels = label_comma()) +
+  scale_x_date(date_labels = "%b %Y") +
+  scale_color_cori() +
+  labs(
+    title    = "S3 object downloads by bucket",
+    subtitle = "Daily GET requests recorded in server access logs",
+    x = NULL, y = "Requests", color = NULL
+  ) +
+  theme_cori_line()
+```
+
+## Who is downloading
+
+The `requester` field carries the full assumed-role session ARN, and the
+session name is minted per credential as `coridata-<caller>-<timestamp>`.
+That is what the query above unpacks into `caller`. Requests with no
+credentials appear as `anonymous`, which on the seven public buckets is
+usually the bulk of the traffic.
+
+```{r chart-by-caller}
+activity |>
+  group_by(caller) |>
+  summarise(requests = sum(requests), .groups = "drop") |>
+  slice_max(requests, n = 12) |>
+  ggplot(aes(reorder(caller, requests), requests)) +
+  geom_col(fill = cori_colors[["Mid Teal"]]) +
+  coord_flip() +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title    = "Downloads by caller",
+    subtitle = "Parsed from the vended credential's session name",
+    x = NULL, y = "Requests"
+  ) +
+  theme_cori_horizontal_bars()
+```
+
+## Year-to-date summary
+
+```{r ytd}
+activity |>
+  filter(day >= as.Date(format(Sys.Date(), "%Y-01-01"))) |>
+  group_by(bucket) |>
+  summarise(
+    requests = sum(requests),
+    gb       = round(sum(bytes, na.rm = TRUE) / 1024^3, 1),
+    callers  = n_distinct(caller[!caller %in% c("anonymous", "local credentials")]),
+    .groups  = "drop"
+  ) |>
+  arrange(desc(requests)) |>
+  knitr::kable()
+```
+
+Swap the `filter()` for `day >= Sys.Date() - 90` to get the trailing
+ninety days instead.
+
+## Caveats
+
+Server access logging is best effort. Most requests produce a record and
+most records arrive within a few hours, but delivery is neither guaranteed
+nor provably complete, and latency means today's activity is not visible
+yet. These numbers are a reliable picture of usage, not an audit trail —
+do not present them as a compliance artifact.
+
+Callers appear as `anon` unless the calling code passes a `caller` tag:
+
+```{r caller-tag}
+con <- connect_to_s3("cori.data.qcew", caller = "quarterly-refresh")
+```

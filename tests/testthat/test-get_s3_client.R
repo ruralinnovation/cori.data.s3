@@ -4,7 +4,7 @@
 test_that("vended path builds a client from fetched credentials", {
   local_mocked_bindings(
     has_local_aws_credentials = function() FALSE,
-    .fetch_vended_credentials = function(vending_url, bucket) {
+    .fetch_vended_credentials = function(vending_url, bucket, caller = NULL) {
       list(
         access_key_id     = "FAKEKEYID",
         secret_access_key = "fakesecret",
@@ -17,6 +17,47 @@ test_that("vended path builds a client from fetched credentials", {
 
   expect_true(is.list(client))
   expect_true(all(c("get_object", "list_objects_v2") %in% names(client)))
+})
+
+test_that("get_s3_client passes its default caller (Sys.getenv('USER')) through to the vending endpoint", {
+  captured_caller <- NULL
+
+  local_mocked_bindings(
+    has_local_aws_credentials = function() FALSE,
+    .fetch_vended_credentials = function(vending_url, bucket, caller = NULL) {
+      captured_caller <<- caller
+      list(
+        access_key_id     = "FAKEKEYID",
+        secret_access_key = "fakesecret",
+        session_token     = "faketoken"
+      )
+    }
+  )
+
+  withr::local_envvar(USER = "test-user")
+  get_s3_client("some.bucket")
+
+  expect_equal(captured_caller, "test-user")
+})
+
+test_that("get_s3_client passes an explicit caller through to the vending endpoint", {
+  captured_caller <- NULL
+
+  local_mocked_bindings(
+    has_local_aws_credentials = function() FALSE,
+    .fetch_vended_credentials = function(vending_url, bucket, caller = NULL) {
+      captured_caller <<- caller
+      list(
+        access_key_id     = "FAKEKEYID",
+        secret_access_key = "fakesecret",
+        session_token     = "faketoken"
+      )
+    }
+  )
+
+  get_s3_client("some.bucket", caller = "my-pipeline")
+
+  expect_equal(captured_caller, "my-pipeline")
 })
 
 test_that("require_local stops with the read-only message when no local creds", {
@@ -38,7 +79,7 @@ test_that("vended path without a bucket stops with the bucket-required message",
 test_that("local path returns a client without touching the vending endpoint", {
   local_mocked_bindings(
     has_local_aws_credentials = function() TRUE,
-    .fetch_vended_credentials = function(vending_url, bucket) {
+    .fetch_vended_credentials = function(vending_url, bucket, caller = NULL) {
       stop("vending endpoint should not be called on the local path")
     }
   )

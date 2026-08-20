@@ -32,8 +32,19 @@ has_local_aws_credentials <- function() {
 # endpoint. Validates the response rather than letting a non-200 body flow
 # into CREATE SECRET as NULLs, which would surface later as an opaque S3
 # auth failure instead of a clear error here.
-.fetch_vended_credentials <- function(vending_url, bucket) {
-  resp <- httr::GET(vending_url, query = list(bucket = bucket))
+#
+# `caller` becomes part of the vended credential's RoleSessionName
+# (coridata-<caller>-<timestamp>), which is what shows up in the
+# `requester` field of S3 server access logs (CLOSE_THE_GAP.md) -- it is
+# the only thing that distinguishes one vended credential's activity from
+# another's in that report. Omitted/empty falls through to the endpoint's
+# own "anon" default.
+.fetch_vended_credentials <- function(vending_url, bucket, caller = NULL) {
+  query <- list(bucket = bucket)
+  if (!is.null(caller) && is.character(caller) && nzchar(caller)) {
+    query$caller <- caller
+  }
+  resp <- httr::GET(vending_url, query = query)
 
   if (httr::http_error(resp)) {
     body <- httr::content(resp, "text", encoding = "UTF-8")
@@ -108,6 +119,13 @@ has_local_aws_credentials <- function() {
 #'   `":memory:"` opens an in-memory instance, matching prior behavior. Pass
 #'   a file path for callers that need the catalog/temp state to persist
 #'   across a script run.
+#' @param caller Character. Identifies this connection in the vending
+#'   endpoint's session name and, downstream, in S3 server access log
+#'   reports (CLOSE_THE_GAP.md) -- without it every vended credential
+#'   attributes to `anon`. Only used on the vending path; ignored when local
+#'   credentials are present. Default: `Sys.getenv("USER")`, a stable,
+#'   non-identifying value (a system username, not personal data). Pass
+#'   e.g. a calling package name for finer-grained attribution.
 #'
 #' @return An open `duckdb_connection`. The caller owns the connection and
 #'   must disconnect it, e.g. `on.exit(DBI::dbDisconnect(con, shutdown = TRUE))`.
@@ -123,7 +141,8 @@ has_local_aws_credentials <- function() {
 connect_to_s3 <- function(bucket, region = "us-east-1",
                           vending_url = default_vending_url(),
                           require_local = FALSE,
-                          dbdir = ":memory:") {
+                          dbdir = ":memory:",
+                          caller = Sys.getenv("USER")) {
   con <- DBI::dbConnect(duckdb::duckdb(), dbdir = dbdir)
 
   DBI::dbExecute(con, "INSTALL httpfs; LOAD httpfs;")
@@ -166,7 +185,7 @@ connect_to_s3 <- function(bucket, region = "us-east-1",
     }
 
     creds <- tryCatch(
-      .fetch_vended_credentials(vending_url, bucket),
+      .fetch_vended_credentials(vending_url, bucket, caller = caller),
       error = function(e) {
         DBI::dbDisconnect(con, shutdown = TRUE)
         stop(conditionMessage(e), call. = FALSE)

@@ -25,9 +25,15 @@ default_vending_url <- function() {
 #    that write to S3 or make account-wide calls must pass
 #    require_local = TRUE to fail here with a clear message instead of an
 #    opaque AccessDenied later.
+#
+# `caller` is forwarded to the vending endpoint's session name, and from
+# there into S3 server access log reports (CLOSE_THE_GAP.md) -- see
+# connect_to_s3()'s `caller` parameter for the full explanation. Only
+# relevant on the vending path.
 get_s3_client <- function(bucket = NULL, region = "us-east-1",
                           vending_url = default_vending_url(),
-                          require_local = FALSE) {
+                          require_local = FALSE,
+                          caller = Sys.getenv("USER")) {
 
   if (has_local_aws_credentials()) {
     return(paws.storage::s3(config = list(region = region)))
@@ -51,7 +57,7 @@ get_s3_client <- function(bucket = NULL, region = "us-east-1",
          "endpoint URL.", call. = FALSE)
   }
 
-  creds <- .fetch_vended_credentials(vending_url, bucket)
+  creds <- .fetch_vended_credentials(vending_url, bucket, caller = caller)
 
   paws.storage::s3(config = list(
     credentials = list(
