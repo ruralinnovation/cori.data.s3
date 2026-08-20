@@ -1,6 +1,8 @@
 <urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
 <url><loc>https://ruralinnovation.github.io/cori.data.s3/404.html</loc></url>
 <url><loc>https://ruralinnovation.github.io/cori.data.s3/LICENSE-text.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/articles/index.html</loc></url>
+<url><loc>https://ruralinnovation.github.io/cori.data.s3/articles/monitoring-s3-access.html</loc></url>
 <url><loc>https://ruralinnovation.github.io/cori.data.s3/authors.html</loc></url>
 <url><loc>https://ruralinnovation.github.io/cori.data.s3/index.html</loc></url>
 <url><loc>https://ruralinnovation.github.io/cori.data.s3/reference/connect_to_s3.html</loc></url>

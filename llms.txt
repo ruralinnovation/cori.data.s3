@@ -94,3 +94,9 @@ Establish S3 connections with credential handling
 - [`put_s3_objects_recursive()`](https://ruralinnovation.github.io/cori.data.s3/reference/put_s3_objects_recursive.md)
   : put files from a local directory into an S3 bucket
 
+# Articles
+
+### All vignettes
+
+- [Monitoring S3
+  access](https://ruralinnovation.github.io/cori.data.s3/articles/monitoring-s3-access.md):

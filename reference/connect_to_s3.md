@@ -14,7 +14,8 @@ connect_to_s3(
   region = "us-east-1",
   vending_url = default_vending_url(),
   require_local = FALSE,
-  dbdir = ":memory:"
+  dbdir = ":memory:",
+  caller = NULL
 )
 ```
 
@@ -49,6 +50,26 @@ connect_to_s3(
   `":memory:"` opens an in-memory instance, matching prior behavior.
   Pass a file path for callers that need the catalog/temp state to
   persist across a script run.
+
+- caller:
+
+  Character. Identifies this connection in the vending endpoint's
+  session name and, downstream, in S3 server access log reports
+  (CLOSE_THE_GAP.md).
+
+  Has no default. When omitted, it is resolved from the ambient AWS
+  identity (`sts:GetCallerIdentity`, reduced to the bare user or role
+  name); if no identity is available, no tag is sent and the endpoint
+  applies its own `anon` default.
+
+  Only meaningful on the vending path. On the local-credentials path the
+  caller's own IAM identity is already what S3 records in the access
+  log's `requester` field, so no tag is needed and no lookup is
+  performed. The lookup is cached for the session.
+
+  The endpoint truncates this to 20 characters when building the session
+  name, so pass a short explicit value where distinguishing
+  similarly-named callers matters.
 
 ## Value
 
