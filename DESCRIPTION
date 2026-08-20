@@ -17,6 +17,8 @@ Imports:
   paws.security.identity,
   paws.storage,
   utils
+Remotes:
+  ruralinnovation/cori.charts
 Suggests:
   cori.charts,
   dplyr,
