@@ -19,11 +19,12 @@ test_that("vended path builds a client from fetched credentials", {
   expect_true(all(c("get_object", "list_objects_v2") %in% names(client)))
 })
 
-test_that("get_s3_client passes its default caller (Sys.getenv('USER')) through to the vending endpoint", {
+test_that("caller falls back to the ambient AWS identity when not supplied", {
   captured_caller <- NULL
 
   local_mocked_bindings(
     has_local_aws_credentials = function() FALSE,
+    .aws_identity_name        = function() "SomeInstanceRole",
     .fetch_vended_credentials = function(vending_url, bucket, caller = NULL) {
       captured_caller <<- caller
       list(
@@ -34,10 +35,75 @@ test_that("get_s3_client passes its default caller (Sys.getenv('USER')) through 
     }
   )
 
-  withr::local_envvar(USER = "test-user")
   get_s3_client("some.bucket")
 
-  expect_equal(captured_caller, "test-user")
+  expect_equal(captured_caller, "SomeInstanceRole")
+})
+
+test_that("no caller is sent when there is no ambient identity to resolve", {
+  captured_caller <- "sentinel"
+
+  local_mocked_bindings(
+    has_local_aws_credentials = function() FALSE,
+    .aws_identity_name        = function() NA_character_,
+    .fetch_vended_credentials = function(vending_url, bucket, caller = NULL) {
+      captured_caller <<- caller
+      list(
+        access_key_id     = "FAKEKEYID",
+        secret_access_key = "fakesecret",
+        session_token     = "faketoken"
+      )
+    }
+  )
+
+  get_s3_client("some.bucket")
+
+  # NULL, not "" -- .fetch_vended_credentials() drops the query parameter
+  # entirely so the endpoint applies its own "anon" default.
+  expect_null(captured_caller)
+})
+
+test_that("an explicit caller takes precedence over the ambient identity", {
+  captured_caller <- NULL
+
+  local_mocked_bindings(
+    has_local_aws_credentials = function() FALSE,
+    .aws_identity_name        = function() "SomeInstanceRole",
+    .fetch_vended_credentials = function(vending_url, bucket, caller = NULL) {
+      captured_caller <<- caller
+      list(
+        access_key_id     = "FAKEKEYID",
+        secret_access_key = "fakesecret",
+        session_token     = "faketoken"
+      )
+    }
+  )
+
+  get_s3_client("some.bucket", caller = "quarterly-refresh")
+
+  expect_equal(captured_caller, "quarterly-refresh")
+})
+
+test_that(".aws_identity_name reduces each ARN shape to a bare name", {
+  shapes <- list(
+    "arn:aws:iam::312512371189:user/jhall"                        = "jhall",
+    "arn:aws:iam::312512371189:role/SomeRole"                     = "SomeRole",
+    "arn:aws:sts::312512371189:assumed-role/SomeRole/i-abc123"    = "SomeRole"
+  )
+
+  for (arn in names(shapes)) {
+    .clear_identity_cache()
+    local_mocked_bindings(
+      .sts_caller_arn = function() arn
+    )
+    expect_equal(.aws_identity_name(), shapes[[arn]], info = arn)
+  }
+
+  .clear_identity_cache()
+  local_mocked_bindings(.sts_caller_arn = function() NULL)
+  expect_true(is.na(.aws_identity_name()))
+
+  .clear_identity_cache()
 })
 
 test_that("get_s3_client passes an explicit caller through to the vending endpoint", {
