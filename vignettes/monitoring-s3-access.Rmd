@@ -138,16 +138,17 @@ frame — the expensive work is already done.
 
 ```{r chart-by-bucket}
 activity |>
+  filter(day >= Sys.Date() - 7) |>
   group_by(bucket, day) |>
   summarise(requests = sum(requests), .groups = "drop") |>
   ggplot(aes(day, requests, color = bucket)) +
   geom_line(linewidth = 0.8) +
   scale_y_continuous(labels = label_comma()) +
-  scale_x_date(date_labels = "%b %Y") +
-  scale_color_cori() +
+  scale_x_date(date_labels = "%b %d", date_breaks = "1 day") +
+  scale_color_viridis_d(option = "turbo", begin = 0.1, end = 0.9) +
   labs(
     title    = "S3 object downloads by bucket",
-    subtitle = "Daily GET requests recorded in server access logs",
+    subtitle = "Daily GET requests over the past week",
     x = NULL, y = "Requests", color = NULL
   ) +
   theme_cori_line()
@@ -189,7 +190,7 @@ activity |>
   coord_flip() +
   scale_y_continuous(labels = label_comma()) +
   labs(
-    title    = "Downloads by caller",
+    title    = "Downloads by credential type",
     subtitle = "Parsed from the vended credential's session name",
     x = NULL, y = "Requests"
   ) +
