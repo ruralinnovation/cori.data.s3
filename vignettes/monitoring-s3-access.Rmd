@@ -67,8 +67,13 @@ memory.
 # at the end of the chunk instead, once `con` is actually done being used.
 con <- connect_to_s3("cori.data.verse")
 
-# Widen or narrow this glob to set the reporting window.
-glob <- "s3://cori.data.verse/logs/312512371189/us-east-1/*/2026/*/*/*"
+# Build date-specific globs for the last 7 days — scans only matching S3 prefixes.
+dates <- seq(Sys.Date() - 6, Sys.Date(), by = "day")
+globs <- sprintf(
+ "s3://cori.data.verse/logs/312512371189/us-east-1/*/%s/*",
+  format(dates, "%Y/%m/%d")
+)
+glob <- paste0("[", paste(sprintf("'%s'", globs), collapse = ", "), "]")
 
 log_pattern <- paste0(
   "^(\\S+) (\\S+) \\[([^\\]]+)\\] (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) ",
@@ -80,7 +85,7 @@ activity <- DBI::dbGetQuery(con, sprintf("
     SELECT regexp_extract(line, '%s',
       ['owner','bucket','ts','ip','requester','reqid',
        'operation','key','status','err','bytes']) AS f
-    FROM read_csv('%s', delim='\\x01', header = false,
+    FROM read_csv(%s, delim='\\x01', header = false,
                   columns = {'line': 'VARCHAR'})
   )
   SELECT
@@ -138,7 +143,6 @@ frame — the expensive work is already done.
 
 ```{r chart-by-bucket}
 activity |>
-  filter(day >= Sys.Date() - 7) |>
   group_by(bucket, day) |>
   summarise(requests = sum(requests), .groups = "drop") |>
   ggplot(aes(day, requests, color = bucket)) +
