@@ -25,7 +25,10 @@ get_s3_tags <- function(bucket_name, s3 = get_s3_client(bucket_name)) {
 }
 
 is_key_already_here <- function(bucket_name, key) {
-  df_key <- list_s3_objects(bucket_name = bucket_name)
+  # Scope the listing to the key itself. `prefix = key` still returns
+  # neighbouring keys that share it as a prefix (e.g. "index.md" also matches
+  # "index.md.metadata.json"), so the %in% below must stay an exact match.
+  df_key <- list_s3_objects(bucket_name = bucket_name, prefix = key)
   key_is_present <- key %in% df_key[["key"]]
 
   if (key_is_present) {
