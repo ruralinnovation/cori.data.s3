@@ -60,8 +60,8 @@ and return only a small summary to R — never pull raw log lines into
 memory.
 
 ```{r read}
-# One glob per day for the past week — each query hits a single date prefix.
-dates <- seq(Sys.Date() - 6, Sys.Date(), by = "day")
+# One glob per day for the past few days — each query hits a single date prefix.
+dates <- seq(Sys.Date() - 3, Sys.Date(), by = "day")
 globs <- sprintf(
   "s3://cori.data.verse/logs/312512371189/us-east-1/*/%s/*",
   format(dates, "%Y/%m/%d")
