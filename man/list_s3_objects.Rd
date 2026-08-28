@@ -4,13 +4,21 @@
 \alias{list_s3_objects}
 \title{List every "keys" from a bucket}
 \usage{
-list_s3_objects(bucket_name)
+list_s3_objects(bucket_name, prefix = NULL)
 }
 \arguments{
 \item{bucket_name}{string, example "test-coridata""}
+
+\item{prefix}{optional string. When supplied, only keys beginning with this
+prefix are requested, using the \code{Prefix} parameter of S3's
+\code{list_objects_v2} so the filtering happens server-side. When \code{NULL} (the
+default) every key in the bucket is returned, which is the original
+behaviour. Scoping matters on buckets that hold large unrelated prefixes
+(e.g. server access logs): an unscoped call paginates the whole bucket.}
 }
 \value{
-a data frame with a key and last_modified columns
+a data frame with a key and last_modified columns. Zero rows, with
+both columns still present, when nothing matches.
 }
 \description{
 List every "keys" from a bucket
@@ -19,6 +27,7 @@ List every "keys" from a bucket
 
 \dontrun{
  s3_asset <- list_bucket("test-coridata")
+ s3_asset <- list_s3_objects("test-coridata", prefix = "dev/content/")
 }
 
 }
