@@ -66,9 +66,6 @@
 <p>Every request to a CORI data bucket is written to an S3 server access
 log. This vignette turns those logs into charts: who is downloading
 what, from which bucket, and how that changes over time.</p>
-<p>Chunks are set <code>eval = FALSE</code> because rendering them
-queries several months of live log data. Run them interactively against
-a real window.</p>
 <div class="section level2">
 <h2 id="where-the-logs-live">Where the logs live<a class="anchor" aria-label="anchor" href="#where-the-logs-live"></a>
 </h2>
@@ -99,11 +96,15 @@ rather than a CSV reader. The important discipline is to aggregate
 inside DuckDB and return only a small summary to R — never pull raw log
 lines into memory.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># One glob per day for the past week — each query hits a single date prefix.</span></span>
-<span><span class="va">dates</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.Date</a></span><span class="op">(</span><span class="op">)</span> <span class="op">-</span> <span class="fl">7</span>, <span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.Date</a></span><span class="op">(</span><span class="op">)</span>, by <span class="op">=</span> <span class="st">"day"</span><span class="op">)</span></span>
-<span><span class="va">globs</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/sprintf.html" class="external-link">sprintf</a></span><span class="op">(</span></span>
-<span>  <span class="st">"s3://cori.data.verse/logs/312512371189/us-east-1/*/%s/*"</span>,</span>
-<span>  <span class="fu"><a href="https://rdrr.io/r/base/format.html" class="external-link">format</a></span><span class="op">(</span><span class="va">dates</span>, <span class="st">"%Y/%m/%d"</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="va">buckets</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
+<span>  <span class="st">"cori.data.bds"</span>,</span>
+<span>  <span class="st">"cori.data.bfs"</span>,</span>
+<span>  <span class="st">"cori.data.bps"</span>,</span>
+<span>  <span class="st">"cori.data.fcc"</span>,</span>
+<span>  <span class="st">"cori.data.hu"</span>,</span>
+<span>  <span class="st">"cori.data.pep"</span>,</span>
+<span>  <span class="st">"cori.data.qcew"</span>,</span>
+<span>  <span class="st">"ruraldefinitions"</span></span>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">log_pattern</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/paste.html" class="external-link">paste0</a></span><span class="op">(</span></span>
@@ -138,26 +139,61 @@ lines into memory.</p>
 <span><span class="st">  GROUP BY 1, 2, 3</span></span>
 <span><span class="st">"</span></span>
 <span></span>
-<span><span class="va">con</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/connect_to_s3.html">connect_to_s3</a></span><span class="op">(</span><span class="st">"cori.data.verse"</span><span class="op">)</span></span>
+<span><span class="va">activity</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">activity</span> <span class="op">&lt;-</span> <span class="fu">purrr</span><span class="fu">::</span><span class="fu"><a href="https://purrr.tidyverse.org/reference/map.html" class="external-link">map</a></span><span class="op">(</span><span class="va">globs</span>, \<span class="op">(</span><span class="va">g</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="fu">DBI</span><span class="fu">::</span><span class="fu"><a href="https://dbi.r-dbi.org/reference/dbGetQuery.html" class="external-link">dbGetQuery</a></span><span class="op">(</span><span class="va">con</span>, <span class="fu"><a href="https://rdrr.io/r/base/sprintf.html" class="external-link">sprintf</a></span><span class="op">(</span><span class="va">query_template</span>, <span class="va">log_pattern</span>, <span class="va">g</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="op">}</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu">dplyr</span><span class="fu">::</span><span class="fu"><a href="https://dplyr.tidyverse.org/reference/bind_rows.html" class="external-link">bind_rows</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu">dplyr</span><span class="fu">::</span><span class="fu"><a href="https://dplyr.tidyverse.org/reference/filter.html" class="external-link">filter</a></span><span class="op">(</span></span>
-<span>    <span class="va">bucket</span> <span class="op"><a href="https://rdrr.io/r/base/match.html" class="external-link">%in%</a></span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
-<span>      <span class="st">"cori.data.bds"</span>,</span>
-<span>      <span class="st">"cori.data.bfs"</span>,</span>
-<span>      <span class="st">"cori.data.bps"</span>,</span>
-<span>      <span class="st">"cori.data.fcc"</span>,</span>
-<span>      <span class="st">"cori.data.hu"</span>,</span>
-<span>      <span class="st">"cori.data.pep"</span>,</span>
-<span>      <span class="st">"cori.data.qcew"</span>,</span>
-<span>      <span class="st">"ruraldefinitions"</span></span>
-<span>    <span class="op">)</span></span>
+<span><span class="kw">for</span> <span class="op">(</span><span class="va">b</span> <span class="kw">in</span> <span class="va">buckets</span><span class="op">)</span> <span class="op">{</span></span>
+<span></span>
+<span>  <span class="co"># One glob per day for the past week — each query hits a single</span></span>
+<span>  <span class="co"># bucket/date prefix, which is what keeps a query inside the vended</span></span>
+<span>  <span class="co"># credential's lifetime.</span></span>
+<span>  <span class="va">dates</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.Date</a></span><span class="op">(</span><span class="op">)</span> <span class="op">-</span> <span class="fl">7</span>, <span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.Date</a></span><span class="op">(</span><span class="op">)</span>, by <span class="op">=</span> <span class="st">"day"</span><span class="op">)</span></span>
+<span>  <span class="va">globs</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/sprintf.html" class="external-link">sprintf</a></span><span class="op">(</span></span>
+<span>    <span class="st">"s3://cori.data.verse/logs/312512371189/us-east-1/%s/%s/*"</span>,</span>
+<span>    <span class="va">b</span>, <span class="fu"><a href="https://rdrr.io/r/base/format.html" class="external-link">format</a></span><span class="op">(</span><span class="va">dates</span>, <span class="st">"%Y/%m/%d"</span><span class="op">)</span></span>
 <span>  <span class="op">)</span></span>
 <span></span>
-<span><span class="fu"><a href="https://pillar.r-lib.org/reference/glimpse.html" class="external-link">glimpse</a></span><span class="op">(</span><span class="va">activity</span><span class="op">)</span></span></code></pre></div>
+<span>  <span class="va">bucket_activity</span> <span class="op">&lt;-</span> <span class="fu">purrr</span><span class="fu">::</span><span class="fu"><a href="https://purrr.tidyverse.org/reference/map.html" class="external-link">map</a></span><span class="op">(</span><span class="va">globs</span>, \<span class="op">(</span><span class="va">g</span><span class="op">)</span> <span class="op">{</span></span>
+<span>    <span class="va">con</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/connect_to_s3.html">connect_to_s3</a></span><span class="op">(</span><span class="st">"cori.data.verse"</span><span class="op">)</span></span>
+<span>    <span class="co"># NOTE: on.exit() only defers to the exit of an enclosing *function*</span></span>
+<span>    <span class="fu"><a href="https://rdrr.io/r/base/on.exit.html" class="external-link">on.exit</a></span><span class="op">(</span><span class="fu">DBI</span><span class="fu">::</span><span class="fu"><a href="https://dbi.r-dbi.org/reference/dbDisconnect.html" class="external-link">dbDisconnect</a></span><span class="op">(</span><span class="va">con</span>, shutdown <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span></span>
+<span></span>
+<span>    <span class="co"># A quiet bucket/day legitimately has no log objects, and read_csv()</span></span>
+<span>    <span class="co"># raises an IO Error rather than returning zero rows when its glob</span></span>
+<span>    <span class="co"># matches nothing. glob() returns zero rows instead of erroring, so it</span></span>
+<span>    <span class="co"># is the guard -- one LIST request on the connection that is already</span></span>
+<span>    <span class="co"># authenticated, rather than a second client with its own credentials.</span></span>
+<span>    <span class="va">found</span> <span class="op">&lt;-</span> <span class="fu">DBI</span><span class="fu">::</span><span class="fu"><a href="https://dbi.r-dbi.org/reference/dbGetQuery.html" class="external-link">dbGetQuery</a></span><span class="op">(</span></span>
+<span>      <span class="va">con</span>, <span class="fu"><a href="https://rdrr.io/r/base/sprintf.html" class="external-link">sprintf</a></span><span class="op">(</span><span class="st">"SELECT count(*) AS n FROM glob('%s')"</span>, <span class="va">g</span><span class="op">)</span></span>
+<span>    <span class="op">)</span><span class="op">$</span><span class="va">n</span></span>
+<span></span>
+<span>    <span class="kw">if</span> <span class="op">(</span><span class="va">found</span> <span class="op">&gt;</span> <span class="fl">0</span><span class="op">)</span> <span class="op">{</span></span>
+<span>      <span class="fu">DBI</span><span class="fu">::</span><span class="fu"><a href="https://dbi.r-dbi.org/reference/dbGetQuery.html" class="external-link">dbGetQuery</a></span><span class="op">(</span><span class="va">con</span>, <span class="fu"><a href="https://rdrr.io/r/base/sprintf.html" class="external-link">sprintf</a></span><span class="op">(</span><span class="va">query_template</span>, <span class="va">log_pattern</span>, <span class="va">g</span><span class="op">)</span><span class="op">)</span></span>
+<span>    <span class="op">}</span> <span class="kw">else</span> <span class="op">{</span></span>
+<span>      <span class="kw"><a href="https://rdrr.io/r/base/function.html" class="external-link">return</a></span><span class="op">(</span><span class="cn">NULL</span><span class="op">)</span></span>
+<span>    <span class="op">}</span></span>
+<span>  <span class="op">}</span><span class="op">)</span></span>
+<span></span>
+<span>  <span class="co"># Appends this bucket's per-day data frames as elements, keeping `activity`</span></span>
+<span>  <span class="co"># a flat list for bind_rows() below. This relies on map() returning a plain</span></span>
+<span>  <span class="co"># list: a data frame is itself a list of columns, so c() would splice one</span></span>
+<span>  <span class="co"># column-by-column rather than appending it whole.</span></span>
+<span>  <span class="va">activity</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="va">activity</span>, <span class="va">bucket_activity</span><span class="op">)</span></span>
+<span><span class="op">}</span></span>
+<span></span>
+<span><span class="va">activity</span> <span class="op">&lt;-</span> <span class="va">activity</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu">dplyr</span><span class="fu">::</span><span class="fu"><a href="https://dplyr.tidyverse.org/reference/bind_rows.html" class="external-link">bind_rows</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu">dplyr</span><span class="fu">::</span><span class="fu"><a href="https://dplyr.tidyverse.org/reference/filter.html" class="external-link">filter</a></span><span class="op">(</span></span>
+<span>    <span class="va">bucket</span> <span class="op"><a href="https://rdrr.io/r/base/match.html" class="external-link">%in%</a></span> <span class="va">buckets</span></span>
+<span>  <span class="op">)</span></span>
+<span></span>
+<span><span class="fu"><a href="https://pillar.r-lib.org/reference/glimpse.html" class="external-link">glimpse</a></span><span class="op">(</span><span class="va">activity</span><span class="op">)</span></span>
+<span><span class="co">#&gt; Rows: 72</span></span>
+<span><span class="co">#&gt; Columns: 5</span></span>
+<span><span class="co">#&gt; $ bucket   <span style="color: #949494; font-style: italic;">&lt;chr&gt;</span> "cori.data.bds"<span style="color: #949494;">, </span>"cori.data.bds"<span style="color: #949494;">, </span>"cori.data.bds"<span style="color: #949494;">, </span>"cori.data…</span></span>
+<span><span class="co">#&gt; $ day      <span style="color: #949494; font-style: italic;">&lt;date&gt;</span> 2026-08-24<span style="color: #949494;">, </span>2026-08-25<span style="color: #949494;">, </span>2026-08-26<span style="color: #949494;">, </span>2026-08-27<span style="color: #949494;">, </span>2026-08-28<span style="color: #949494;">, </span>…</span></span>
+<span><span class="co">#&gt; $ caller   <span style="color: #949494; font-style: italic;">&lt;chr&gt;</span> "local credentials"<span style="color: #949494;">, </span>"local credentials"<span style="color: #949494;">, </span>"local credentials"…</span></span>
+<span><span class="co">#&gt; $ requests <span style="color: #949494; font-style: italic;">&lt;dbl&gt;</span> 376<span style="color: #949494;">, </span>190<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>563<span style="color: #949494;">, </span>529<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>365<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>…</span></span>
+<span><span class="co">#&gt; $ bytes    <span style="color: #949494; font-style: italic;">&lt;dbl&gt;</span> 36378558<span style="color: #949494;">, </span>18205991<span style="color: #949494;">, </span>736<span style="color: #949494;">, </span>54567469<span style="color: #949494;">, </span>48354171<span style="color: #949494;">, </span>26<span style="color: #949494;">, </span>736<span style="color: #949494;">, </span>736<span style="color: #949494;">, </span>34…</span></span></code></pre></div>
 <p>One row per bucket, day, and caller. Everything below is
 <code>dplyr</code> on that frame — the expensive work is already
 done.</p>
@@ -181,6 +217,7 @@ done.</p>
 <span>    x <span class="op">=</span> <span class="cn">NULL</span>, y <span class="op">=</span> <span class="st">"Requests"</span>, color <span class="op">=</span> <span class="cn">NULL</span></span>
 <span>  <span class="op">)</span> <span class="op">+</span></span>
 <span>  <span class="fu"><a href="https://ruralinnovation.github.io/cori.charts/reference/theme_cori_line.html" class="external-link">theme_cori_line</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
+<p><img src="monitoring-s3-access_files/figure-html/chart-by-bucket-1.png" class="r-plt" alt="" width="3600"></p>
 </div>
 <div class="section level2">
 <h2 id="who-is-downloading">Who is downloading<a class="anchor" aria-label="anchor" href="#who-is-downloading"></a>
@@ -224,6 +261,7 @@ identity that simply didn’t go through the vending endpoint.</p>
 <span>    x <span class="op">=</span> <span class="cn">NULL</span>, y <span class="op">=</span> <span class="st">"Requests"</span></span>
 <span>  <span class="op">)</span> <span class="op">+</span></span>
 <span>  <span class="fu"><a href="https://ruralinnovation.github.io/cori.charts/reference/theme_cori_horizontal_bars.html" class="external-link">theme_cori_horizontal_bars</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
+<p><img src="monitoring-s3-access_files/figure-html/chart-by-caller-1.png" class="r-plt" alt="" width="3600"></p>
 </div>
 <div class="section level2">
 <h2 id="year-to-date-summary">Year-to-date summary<a class="anchor" aria-label="anchor" href="#year-to-date-summary"></a>
@@ -240,6 +278,52 @@ identity that simply didn’t go through the vending endpoint.</p>
 <span>  <span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/arrange.html" class="external-link">arrange</a></span><span class="op">(</span><span class="fu"><a href="https://dplyr.tidyverse.org/reference/desc.html" class="external-link">desc</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu">knitr</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/pkg/knitr/man/kable.html" class="external-link">kable</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
+<table class="table">
+<thead><tr class="header">
+<th align="left">bucket</th>
+<th align="right">requests</th>
+<th align="right">gb</th>
+<th align="right">callers</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td align="left">cori.data.fcc</td>
+<td align="right">460846</td>
+<td align="right">185.8</td>
+<td align="right">2</td>
+</tr>
+<tr class="even">
+<td align="left">cori.data.qcew</td>
+<td align="right">15406</td>
+<td align="right">4.3</td>
+<td align="right">2</td>
+</tr>
+<tr class="odd">
+<td align="left">cori.data.bds</td>
+<td align="right">2031</td>
+<td align="right">0.2</td>
+<td align="right">2</td>
+</tr>
+<tr class="even">
+<td align="left">cori.data.pep</td>
+<td align="right">686</td>
+<td align="right">0.0</td>
+<td align="right">2</td>
+</tr>
+<tr class="odd">
+<td align="left">ruraldefinitions</td>
+<td align="right">58</td>
+<td align="right">0.0</td>
+<td align="right">2</td>
+</tr>
+<tr class="even">
+<td align="left">cori.data.bps</td>
+<td align="right">16</td>
+<td align="right">0.0</td>
+<td align="right">1</td>
+</tr>
+</tbody>
+</table>
 <p>Swap the <code><a href="https://dplyr.tidyverse.org/reference/filter.html" class="external-link">filter()</a></code> for
 <code>day &gt;= Sys.Date() - 90</code> to get the trailing ninety days
 instead.</p>

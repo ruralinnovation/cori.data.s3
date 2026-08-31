@@ -4,9 +4,6 @@ Every request to a CORI data bucket is written to an S3 server access
 log. This vignette turns those logs into charts: who is downloading
 what, from which bucket, and how that changes over time.
 
-Chunks are set `eval = FALSE` because rendering them queries several
-months of live log data. Run them interactively against a real window.
-
 ## Where the logs live
 
 Server access logging is enabled on every allowlisted bucket except
@@ -41,11 +38,15 @@ into memory.
 
 ``` r
 
-# One glob per day for the past week — each query hits a single date prefix.
-dates <- seq(Sys.Date() - 7, Sys.Date(), by = "day")
-globs <- sprintf(
-  "s3://cori.data.verse/logs/312512371189/us-east-1/*/%s/*",
-  format(dates, "%Y/%m/%d")
+buckets <- c(
+  "cori.data.bds",
+  "cori.data.bfs",
+  "cori.data.bps",
+  "cori.data.fcc",
+  "cori.data.hu",
+  "cori.data.pep",
+  "cori.data.qcew",
+  "ruraldefinitions"
 )
 
 log_pattern <- paste0(
@@ -80,26 +81,61 @@ query_template <- "
   GROUP BY 1, 2, 3
 "
 
-con <- connect_to_s3("cori.data.verse")
+activity <- list()
 
-activity <- purrr::map(globs, \(g) {
-  DBI::dbGetQuery(con, sprintf(query_template, log_pattern, g))
-}) |>
+for (b in buckets) {
+
+  # One glob per day for the past week — each query hits a single
+  # bucket/date prefix, which is what keeps a query inside the vended
+  # credential's lifetime.
+  dates <- seq(Sys.Date() - 7, Sys.Date(), by = "day")
+  globs <- sprintf(
+    "s3://cori.data.verse/logs/312512371189/us-east-1/%s/%s/*",
+    b, format(dates, "%Y/%m/%d")
+  )
+
+  bucket_activity <- purrr::map(globs, \(g) {
+    con <- connect_to_s3("cori.data.verse")
+    # NOTE: on.exit() only defers to the exit of an enclosing *function*
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+    # A quiet bucket/day legitimately has no log objects, and read_csv()
+    # raises an IO Error rather than returning zero rows when its glob
+    # matches nothing. glob() returns zero rows instead of erroring, so it
+    # is the guard -- one LIST request on the connection that is already
+    # authenticated, rather than a second client with its own credentials.
+    found <- DBI::dbGetQuery(
+      con, sprintf("SELECT count(*) AS n FROM glob('%s')", g)
+    )$n
+
+    if (found > 0) {
+      DBI::dbGetQuery(con, sprintf(query_template, log_pattern, g))
+    } else {
+      return(NULL)
+    }
+  })
+
+  # Appends this bucket's per-day data frames as elements, keeping `activity`
+  # a flat list for bind_rows() below. This relies on map() returning a plain
+  # list: a data frame is itself a list of columns, so c() would splice one
+  # column-by-column rather than appending it whole.
+  activity <- c(activity, bucket_activity)
+}
+
+activity <- activity |>
   dplyr::bind_rows() |>
   dplyr::filter(
-    bucket %in% c(
-      "cori.data.bds",
-      "cori.data.bfs",
-      "cori.data.bps",
-      "cori.data.fcc",
-      "cori.data.hu",
-      "cori.data.pep",
-      "cori.data.qcew",
-      "ruraldefinitions"
-    )
+    bucket %in% buckets
   )
 
 glimpse(activity)
+#> Rows: 72
+#> Columns: 5
+#> $ bucket   <chr> "cori.data.bds", "cori.data.bds", "cori.data.bds", "cori.data…
+#> $ day      <date> 2026-08-24, 2026-08-25, 2026-08-26, 2026-08-27, 2026-08-28, …
+#> $ caller   <chr> "local credentials", "local credentials", "local credentials"…
+#> $ requests <dbl> 376, 190, 2, 563, 529, 2, 2, 2, 365, 2, 2, 2, 2, 2, 2, 2, 2, …
+#> $ bytes    <dbl> 36378558, 18205991, 736, 54567469, 48354171, 26, 736, 736, 34…
 ```
 
 One row per bucket, day, and caller. Everything below is `dplyr` on that
@@ -125,6 +161,8 @@ activity |>
   ) +
   theme_cori_line()
 ```
+
+![](monitoring-s3-access_files/figure-html/chart-by-bucket-1.png)
 
 ## Who is downloading
 
@@ -172,6 +210,8 @@ activity |>
   theme_cori_horizontal_bars()
 ```
 
+![](monitoring-s3-access_files/figure-html/chart-by-caller-1.png)
+
 ## Year-to-date summary
 
 ``` r
@@ -188,6 +228,15 @@ activity |>
   arrange(desc(requests)) |>
   knitr::kable()
 ```
+
+| bucket           | requests |    gb | callers |
+|:-----------------|---------:|------:|--------:|
+| cori.data.fcc    |   460846 | 185.8 |       2 |
+| cori.data.qcew   |    15406 |   4.3 |       2 |
+| cori.data.bds    |     2031 |   0.2 |       2 |
+| cori.data.pep    |      686 |   0.0 |       2 |
+| ruraldefinitions |       58 |   0.0 |       2 |
+| cori.data.bps    |       16 |   0.0 |       1 |
 
 Swap the [`filter()`](https://dplyr.tidyverse.org/reference/filter.html)
 for `day >= Sys.Date() - 90` to get the trailing ninety days instead.
