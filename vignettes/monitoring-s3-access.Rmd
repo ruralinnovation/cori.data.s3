@@ -40,7 +40,7 @@ That layout matters for performance. Narrowing the glob to the months you
 care about is what keeps a query reading megabytes instead of the full
 history — there are hundreds of thousands of small log objects.
 
-```{r libraries}
+```{r libraries, eval = FALSE}
 library(cori.data.s3)
 library(cori.charts)
 library(dplyr)
@@ -59,9 +59,9 @@ than a CSV reader. The important discipline is to aggregate inside DuckDB
 and return only a small summary to R — never pull raw log lines into
 memory.
 
-```{r read}
-# One glob per day for the past few days — each query hits a single date prefix.
-dates <- seq(Sys.Date() - 3, Sys.Date(), by = "day")
+```{r read, eval = FALSE}
+# One glob per day for the past week — each query hits a single date prefix.
+dates <- seq(Sys.Date() - 7, Sys.Date(), by = "day")
 globs <- sprintf(
   "s3://cori.data.verse/logs/312512371189/us-east-1/*/%s/*",
   format(dates, "%Y/%m/%d")
@@ -99,11 +99,10 @@ query_template <- "
   GROUP BY 1, 2, 3
 "
 
+con <- connect_to_s3("cori.data.verse")
+
 activity <- purrr::map(globs, \(g) {
-  con <- connect_to_s3("cori.data.verse")
-  # NOTE: on.exit() only defers to the exit of an enclosing *function*
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  DBI::dbGetQuery(con, sprintf(query_template, log_pattern, g))  
+  DBI::dbGetQuery(con, sprintf(query_template, log_pattern, g))
 }) |>
   dplyr::bind_rows() |>
   dplyr::filter(
@@ -127,7 +126,7 @@ frame — the expensive work is already done.
 
 ## Downloads over time, by bucket
 
-```{r chart-by-bucket}
+```{r chart-by-bucket, eval = FALSE}
 activity |>
   filter(day >= Sys.Date() - 7) |>
   group_by(bucket, day) |>
@@ -161,7 +160,7 @@ seven public buckets, `anonymous` is usually the bulk of the traffic.
 `local credentials` is a separate, real category: a known AWS identity that
 simply didn't go through the vending endpoint.
 
-```{r chart-by-caller}
+```{r chart-by-caller, eval = FALSE}
 activity |>
   group_by(caller) |>
   summarise(requests = sum(requests), .groups = "drop") |>
@@ -190,7 +189,7 @@ activity |>
 
 ## Year-to-date summary
 
-```{r ytd}
+```{r ytd, eval = FALSE}
 activity |>
   filter(day >= as.Date(format(Sys.Date(), "%Y-01-01"))) |>
   group_by(bucket) |>
@@ -221,7 +220,7 @@ fallback) -- which is why the query above folds it into `anonymous` rather
 than treating "vended but untagged" as its own category. Passing a tag is
 what moves a request out of `anonymous` and into an attributable name:
 
-```{r caller-tag}
+```{r caller-tag, eval = FALSE}
 con <- connect_to_s3("cori.data.qcew", caller = "quarterly-refresh")
 DBI::dbDisconnect(con, shutdown = TRUE)
 ```
