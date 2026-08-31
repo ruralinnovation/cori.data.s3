@@ -24,6 +24,7 @@ full history — there are hundreds of thousands of small log objects.
 library(cori.data.s3)
 library(cori.charts)
 library(dplyr)
+library(purrr)
 library(ggplot2)
 library(scales)
 
@@ -40,23 +41,19 @@ into memory.
 
 ``` r
 
-# NOTE: on.exit() only defers to the exit of an enclosing *function* -- a
-# knitr chunk isn't one. evaluate::evaluate() runs each top-level statement
-# individually, so on.exit() here would fire the instant it's called,
-# closing `con` before the query below ever runs (confirmed: this is what
-# produced the "Invalid connection" render failure). Disconnect explicitly
-# at the end of the chunk instead, once `con` is actually done being used.
-con <- connect_to_s3("cori.data.verse")
-
-# Widen or narrow this glob to set the reporting window.
-glob <- "s3://cori.data.verse/logs/312512371189/us-east-1/*/2026/*/*/*"
+# One glob per day for the past week — each query hits a single date prefix.
+dates <- seq(Sys.Date() - 7, Sys.Date(), by = "day")
+globs <- sprintf(
+  "s3://cori.data.verse/logs/312512371189/us-east-1/*/%s/*",
+  format(dates, "%Y/%m/%d")
+)
 
 log_pattern <- paste0(
   "^(\\S+) (\\S+) \\[([^\\]]+)\\] (\\S+) (\\S+) (\\S+) (\\S+) (\\S+) ",
   "\"[^\"]*\" (\\S+) (\\S+) (\\S+)"
 )
 
-activity <- DBI::dbGetQuery(con, sprintf("
+query_template <- "
   WITH raw AS (
     SELECT regexp_extract(line, '%s',
       ['owner','bucket','ts','ip','requester','reqid',
@@ -69,18 +66,6 @@ activity <- DBI::dbGetQuery(con, sprintf("
     CAST(strptime(split_part(f.ts, ' ', 1),
                   '%%d/%%b/%%Y:%%H:%%M:%%S') AS DATE)          AS day,
     CASE
-      -- Deliberately conflated: a request with no credentials at all and a
-      -- vended credential nobody tagged both mean the same thing for this
-      -- report -- we cannot say who did it. That is the operative line, not
-      -- whether a credential existed. local credentials stays separate
-      -- below because it IS a known identity, just one that skipped
-      -- vending.
-      -- The vending endpoint's own untagged fallback embeds the literal
-      -- text 'anon' in the session name (coridata-anon-<timestamp>), so
-      -- regexp_extract succeeds and returns 'anon' -- not NULL or empty.
-      -- nullif(..., '') alone never catches that; it has to be checked for
-      -- explicitly, same as the empty-string case, or it survives as its
-      -- own category.
       WHEN f.requester = '-' THEN 'anonymous'
       WHEN f.requester LIKE '%%CoriDataS3ReaderRole%%'
         THEN coalesce(nullif(nullif(regexp_extract(
@@ -93,9 +78,16 @@ activity <- DBI::dbGetQuery(con, sprintf("
   FROM raw
   WHERE f.operation LIKE 'REST.GET.OBJECT%%'
   GROUP BY 1, 2, 3
-", log_pattern, glob)) |>
+"
+
+con <- connect_to_s3("cori.data.verse")
+
+activity <- purrr::map(globs, \(g) {
+  DBI::dbGetQuery(con, sprintf(query_template, log_pattern, g))
+}) |>
+  dplyr::bind_rows() |>
   dplyr::filter(
-    `bucket` %in% c(
+    bucket %in% c(
       "cori.data.bds",
       "cori.data.bfs",
       "cori.data.bps",
@@ -107,16 +99,7 @@ activity <- DBI::dbGetQuery(con, sprintf("
     )
   )
 
-DBI::dbDisconnect(con, shutdown = TRUE)
-
 glimpse(activity)
-#> Rows: 17
-#> Columns: 5
-#> $ bucket   <chr> "ruraldefinitions", "cori.data.qcew", "cori.data.pep", "cori.…
-#> $ day      <date> 2026-08-20, 2026-08-20, 2026-08-20, 2026-08-19, 2026-08-19, …
-#> $ caller   <chr> "anonymous", "anonymous", "anonymous", "local credentials", "…
-#> $ requests <dbl> 2, 34, 5, 1, 1, 2, 2, 14, 88, 376, 1, 1, 61532, 1, 1, 31, 2
-#> $ bytes    <dbl> 119149, 4539986, 65, 368, 368, 736, 742, 1218630, 2618152, 36…
 ```
 
 One row per bucket, day, and caller. Everything below is `dplyr` on that
@@ -127,22 +110,21 @@ frame — the expensive work is already done.
 ``` r
 
 activity |>
+  filter(day >= Sys.Date() - 7) |>
   group_by(bucket, day) |>
   summarise(requests = sum(requests), .groups = "drop") |>
   ggplot(aes(day, requests, color = bucket)) +
   geom_line(linewidth = 0.8) +
   scale_y_continuous(labels = label_comma()) +
-  scale_x_date(date_labels = "%b %Y") +
-  scale_color_cori() +
+  scale_x_date(date_labels = "%b %d", date_breaks = "1 day") +
+  scale_color_viridis_d(option = "turbo", begin = 0.1, end = 0.9) +
   labs(
     title    = "S3 object downloads by bucket",
-    subtitle = "Daily GET requests recorded in server access logs",
+    subtitle = "Daily GET requests over the past week",
     x = NULL, y = "Requests", color = NULL
   ) +
   theme_cori_line()
 ```
-
-![](monitoring-s3-access_files/figure-html/chart-by-bucket-1.png)
 
 ## Who is downloading
 
@@ -183,14 +165,12 @@ activity |>
   coord_flip() +
   scale_y_continuous(labels = label_comma()) +
   labs(
-    title    = "Downloads by caller",
+    title    = "Downloads by credential type",
     subtitle = "Parsed from the vended credential's session name",
     x = NULL, y = "Requests"
   ) +
   theme_cori_horizontal_bars()
 ```
-
-![](monitoring-s3-access_files/figure-html/chart-by-caller-1.png)
 
 ## Year-to-date summary
 
@@ -208,15 +188,6 @@ activity |>
   arrange(desc(requests)) |>
   knitr::kable()
 ```
-
-| bucket           | requests |   gb | callers |
-|:-----------------|---------:|-----:|--------:|
-| cori.data.fcc    |    61535 | 19.6 |       2 |
-| cori.data.bds    |      377 |  0.0 |       1 |
-| cori.data.pep    |       94 |  0.0 |       2 |
-| cori.data.qcew   |       80 |  0.0 |       2 |
-| ruraldefinitions |        5 |  0.0 |       2 |
-| cori.data.bps    |        3 |  0.0 |       1 |
 
 Swap the [`filter()`](https://dplyr.tidyverse.org/reference/filter.html)
 for `day >= Sys.Date() - 90` to get the trailing ninety days instead.
