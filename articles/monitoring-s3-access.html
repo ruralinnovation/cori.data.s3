@@ -96,7 +96,8 @@ rather than a CSV reader. The important discipline is to aggregate
 inside DuckDB and return only a small summary to R — never pull raw log
 lines into memory.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">buckets</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
+<code class="sourceCode R"><span></span>
+<span><span class="va">buckets</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  <span class="st">"cori.data.bds"</span>,</span>
 <span>  <span class="st">"cori.data.bfs"</span>,</span>
 <span>  <span class="st">"cori.data.bps"</span>,</span>
@@ -119,24 +120,44 @@ lines into memory.</p>
 <span><span class="st">       'operation','key','status','err','bytes']) AS f</span></span>
 <span><span class="st">    FROM read_csv('%s', delim='\\x01', header = false,</span></span>
 <span><span class="st">                  columns = {'line': 'VARCHAR'})</span></span>
+<span><span class="st">  ),</span></span>
+<span><span class="st">  parsed AS (</span></span>
+<span><span class="st">    SELECT</span></span>
+<span><span class="st">      f.bucket                                                 AS bucket,</span></span>
+<span><span class="st">      CAST(strptime(split_part(f.ts, ' ', 1),</span></span>
+<span><span class="st">                    '%%d/%%b/%%Y:%%H:%%M:%%S') AS DATE)        AS day,</span></span>
+<span><span class="st">      f.requester                                              AS requester,</span></span>
+<span><span class="st">      split_part(f.requester, '/', 3)                          AS session_name,</span></span>
+<span><span class="st">      TRY_CAST(f.bytes AS BIGINT)                              AS bytes</span></span>
+<span><span class="st">    FROM raw</span></span>
+<span><span class="st">    WHERE f.operation LIKE 'REST.GET.OBJECT%%'</span></span>
 <span><span class="st">  )</span></span>
 <span><span class="st">  SELECT</span></span>
-<span><span class="st">    f.bucket                                                   AS bucket,</span></span>
-<span><span class="st">    CAST(strptime(split_part(f.ts, ' ', 1),</span></span>
-<span><span class="st">                  '%%d/%%b/%%Y:%%H:%%M:%%S') AS DATE)          AS day,</span></span>
+<span><span class="st">    bucket,</span></span>
+<span><span class="st">    day,</span></span>
+<span><span class="st">    -- caller_type: for aggregating by credential category</span></span>
 <span><span class="st">    CASE</span></span>
-<span><span class="st">      WHEN f.requester = '-' THEN 'anonymous'</span></span>
-<span><span class="st">      WHEN f.requester LIKE '%%CoriDataS3ReaderRole%%'</span></span>
-<span><span class="st">        THEN coalesce(nullif(nullif(regexp_extract(</span></span>
-<span><span class="st">               split_part(f.requester, '/', 3),</span></span>
-<span><span class="st">               '^coridata-(.*)-[0-9]+$', 1), ''), 'anon'), 'anonymous')</span></span>
-<span><span class="st">      ELSE 'local credentials'</span></span>
-<span><span class="st">    END                                                        AS caller,</span></span>
+<span><span class="st">      WHEN requester = '-' THEN 'anonymous'</span></span>
+<span><span class="st">      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'</span></span>
+<span><span class="st">           AND session_name LIKE 'coridata-anon-%%'</span></span>
+<span><span class="st">        THEN 'anonymous'</span></span>
+<span><span class="st">      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'</span></span>
+<span><span class="st">           AND session_name LIKE 'coridata-tag-%%'</span></span>
+<span><span class="st">        THEN 'tagged'</span></span>
+<span><span class="st">      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'</span></span>
+<span><span class="st">        THEN 'anonymous'  -- legacy format fallback</span></span>
+<span><span class="st">      ELSE 'local'</span></span>
+<span><span class="st">    END                                                        AS caller_type,</span></span>
+<span><span class="st">    -- caller_id: IP hash (anon) or explicit tag (tagged) for drill-down</span></span>
+<span><span class="st">    CASE</span></span>
+<span><span class="st">      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'</span></span>
+<span><span class="st">        THEN regexp_extract(session_name, '^coridata-(?:anon|tag)-([^-]+)-[0-9]+$', 1)</span></span>
+<span><span class="st">      ELSE NULL</span></span>
+<span><span class="st">    END                                                        AS caller_id,</span></span>
 <span><span class="st">    COUNT(*)                                                   AS requests,</span></span>
-<span><span class="st">    SUM(TRY_CAST(f.bytes AS BIGINT))                           AS bytes</span></span>
-<span><span class="st">  FROM raw</span></span>
-<span><span class="st">  WHERE f.operation LIKE 'REST.GET.OBJECT%%'</span></span>
-<span><span class="st">  GROUP BY 1, 2, 3</span></span>
+<span><span class="st">    SUM(bytes)                                                 AS bytes</span></span>
+<span><span class="st">  FROM parsed</span></span>
+<span><span class="st">  GROUP BY 1, 2, 3, 4</span></span>
 <span><span class="st">"</span></span>
 <span></span>
 <span><span class="va">activity</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span><span class="op">)</span></span>
@@ -187,23 +208,26 @@ lines into memory.</p>
 <span>  <span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="https://pillar.r-lib.org/reference/glimpse.html" class="external-link">glimpse</a></span><span class="op">(</span><span class="va">activity</span><span class="op">)</span></span>
-<span><span class="co">#&gt; Rows: 72</span></span>
-<span><span class="co">#&gt; Columns: 5</span></span>
-<span><span class="co">#&gt; $ bucket   <span style="color: #949494; font-style: italic;">&lt;chr&gt;</span> "cori.data.bds"<span style="color: #949494;">, </span>"cori.data.bds"<span style="color: #949494;">, </span>"cori.data.bds"<span style="color: #949494;">, </span>"cori.data…</span></span>
-<span><span class="co">#&gt; $ day      <span style="color: #949494; font-style: italic;">&lt;date&gt;</span> 2026-08-24<span style="color: #949494;">, </span>2026-08-25<span style="color: #949494;">, </span>2026-08-26<span style="color: #949494;">, </span>2026-08-27<span style="color: #949494;">, </span>2026-08-28<span style="color: #949494;">, </span>…</span></span>
-<span><span class="co">#&gt; $ caller   <span style="color: #949494; font-style: italic;">&lt;chr&gt;</span> "local credentials"<span style="color: #949494;">, </span>"local credentials"<span style="color: #949494;">, </span>"local credentials"…</span></span>
-<span><span class="co">#&gt; $ requests <span style="color: #949494; font-style: italic;">&lt;dbl&gt;</span> 376<span style="color: #949494;">, </span>190<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>563<span style="color: #949494;">, </span>529<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>365<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>…</span></span>
-<span><span class="co">#&gt; $ bytes    <span style="color: #949494; font-style: italic;">&lt;dbl&gt;</span> 36378558<span style="color: #949494;">, </span>18205991<span style="color: #949494;">, </span>736<span style="color: #949494;">, </span>54567469<span style="color: #949494;">, </span>48354171<span style="color: #949494;">, </span>26<span style="color: #949494;">, </span>736<span style="color: #949494;">, </span>736<span style="color: #949494;">, </span>34…</span></span></code></pre></div>
-<p>One row per bucket, day, and caller. Everything below is
-<code>dplyr</code> on that frame — the expensive work is already
+<span><span class="co">#&gt; Rows: 79</span></span>
+<span><span class="co">#&gt; Columns: 6</span></span>
+<span><span class="co">#&gt; $ bucket      <span style="color: #949494; font-style: italic;">&lt;chr&gt;</span> "cori.data.bds"<span style="color: #949494;">, </span>"cori.data.bds"<span style="color: #949494;">, </span>"cori.data.bds"<span style="color: #949494;">, </span>"cori.d…</span></span>
+<span><span class="co">#&gt; $ day         <span style="color: #949494; font-style: italic;">&lt;date&gt;</span> 2026-09-02<span style="color: #949494;">, </span>2026-09-03<span style="color: #949494;">, </span>2026-09-04<span style="color: #949494;">, </span>2026-09-04<span style="color: #949494;">, </span>2026-09-0…</span></span>
+<span><span class="co">#&gt; $ caller_type <span style="color: #949494; font-style: italic;">&lt;chr&gt;</span> "local"<span style="color: #949494;">, </span>"local"<span style="color: #949494;">, </span>"local"<span style="color: #949494;">, </span>"anonymous"<span style="color: #949494;">, </span>"local"<span style="color: #949494;">, </span>"local"<span style="color: #949494;">, </span>…</span></span>
+<span><span class="co">#&gt; $ caller_id   <span style="color: #949494; font-style: italic;">&lt;chr&gt;</span> <span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span><span style="color: #949494;">, </span><span style="color: #BB0000;">NA</span>…</span></span>
+<span><span class="co">#&gt; $ requests    <span style="color: #949494; font-style: italic;">&lt;dbl&gt;</span> 2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>4761<span style="color: #949494;">, </span>60<span style="color: #949494;">, </span>3<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>37<span style="color: #949494;">, </span>4<span style="color: #949494;">, </span>3847<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>707<span style="color: #949494;">, </span>6<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>2<span style="color: #949494;">, </span>3<span style="color: #949494;">, </span>…</span></span>
+<span><span class="co">#&gt; $ bytes       <span style="color: #949494; font-style: italic;">&lt;dbl&gt;</span> 736<span style="color: #949494;">, </span>736<span style="color: #949494;">, </span>745036330<span style="color: #949494;">, </span>780<span style="color: #949494;">, </span>1104<span style="color: #949494;">, </span>716<span style="color: #949494;">, </span>19877407<span style="color: #949494;">, </span>588<span style="color: #949494;">, </span>390612…</span></span></code></pre></div>
+<p>One row per bucket, day, caller type, and caller ID. Everything below
+is <code>dplyr</code> on that frame — the expensive work is already
 done.</p>
 </div>
 <div class="section level2">
 <h2 id="downloads-over-time-by-bucket">Downloads over time, by bucket<a class="anchor" aria-label="anchor" href="#downloads-over-time-by-bucket"></a>
 </h2>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">activity</span> <span class="op">|&gt;</span></span>
+<code class="sourceCode R"><span></span>
+<span><span class="va">activity</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/filter.html" class="external-link">filter</a></span><span class="op">(</span><span class="va">day</span> <span class="op">&gt;=</span> <span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.Date</a></span><span class="op">(</span><span class="op">)</span> <span class="op">-</span> <span class="fl">7</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/filter.html" class="external-link">filter</a></span><span class="op">(</span><span class="va">bucket</span> <span class="op">!=</span> <span class="st">"cori.data.fcc"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/group_by.html" class="external-link">group_by</a></span><span class="op">(</span><span class="va">bucket</span>, <span class="va">day</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/summarise.html" class="external-link">summarise</a></span><span class="op">(</span>requests <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/sum.html" class="external-link">sum</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span>, .groups <span class="op">=</span> <span class="st">"drop"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/ggplot.html" class="external-link">ggplot</a></span><span class="op">(</span><span class="fu"><a href="https://ggplot2.tidyverse.org/reference/aes.html" class="external-link">aes</a></span><span class="op">(</span><span class="va">day</span>, <span class="va">requests</span>, color <span class="op">=</span> <span class="va">bucket</span><span class="op">)</span><span class="op">)</span> <span class="op">+</span></span>
@@ -212,7 +236,7 @@ done.</p>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/scale_date.html" class="external-link">scale_x_date</a></span><span class="op">(</span>date_labels <span class="op">=</span> <span class="st">"%b %d"</span>, date_breaks <span class="op">=</span> <span class="st">"1 day"</span><span class="op">)</span> <span class="op">+</span></span>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/scale_viridis.html" class="external-link">scale_color_viridis_d</a></span><span class="op">(</span>option <span class="op">=</span> <span class="st">"turbo"</span>, begin <span class="op">=</span> <span class="fl">0.1</span>, end <span class="op">=</span> <span class="fl">0.9</span><span class="op">)</span> <span class="op">+</span></span>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/labs.html" class="external-link">labs</a></span><span class="op">(</span></span>
-<span>    title    <span class="op">=</span> <span class="st">"S3 object downloads by bucket"</span>,</span>
+<span>    title    <span class="op">=</span> <span class="st">"S3 object requests by bucket"</span>,</span>
 <span>    subtitle <span class="op">=</span> <span class="st">"Daily GET requests over the past week"</span>,</span>
 <span>    x <span class="op">=</span> <span class="cn">NULL</span>, y <span class="op">=</span> <span class="st">"Requests"</span>, color <span class="op">=</span> <span class="cn">NULL</span></span>
 <span>  <span class="op">)</span> <span class="op">+</span></span>
@@ -223,30 +247,33 @@ done.</p>
 <h2 id="who-is-downloading">Who is downloading<a class="anchor" aria-label="anchor" href="#who-is-downloading"></a>
 </h2>
 <p>The <code>requester</code> field carries the full assumed-role
-session ARN, and the session name is minted per credential as
-<code>coridata-&lt;caller&gt;-&lt;timestamp&gt;</code>. That is what the
-query above unpacks into <code>caller</code>.</p>
-<p><code>anonymous</code> deliberately combines two things that are
-technically different but mean the same thing for this report: a request
-with no credentials at all, and a vended credential nobody tagged with a
-<code>caller</code>. Both answer “who did this?” with nothing. That’s
-the question this report exists to answer, so the two collapse into one
-number rather than being split by a technical distinction (had a
-credential vs. didn’t) that doesn’t matter here. On the seven public
+session ARN, and the session name encodes both caller type and a stable
+identifier:</p>
+<ul>
+<li>
+<code>coridata-anon-{ipHash}-{ts}</code> — anonymous caller with
+IP-based fingerprint</li>
+<li>
+<code>coridata-tag-{callerId}-{ts}</code> — tagged caller with
+explicit identifier</li>
+</ul>
+<p>The query unpacks these into two columns: <code>caller_type</code>
+for aggregation (<code>anonymous</code>, <code>tagged</code>, or
+<code>local</code>) and <code>caller_id</code> for drill-down (the IP
+hash or explicit tag).</p>
+<p><code>anonymous</code> deliberately combines requests with no
+credentials at all and vended credentials without a <code>caller</code>
+tag. Both answer “who did this?” with nothing — the distinction (had a
+credential vs. didn’t) doesn’t matter for attribution. On the public
 buckets, <code>anonymous</code> is usually the bulk of the traffic.
-<code>local credentials</code> is a separate, real category: a known AWS
-identity that simply didn’t go through the vending endpoint.</p>
+<code>local</code> is a separate category: a known AWS identity that
+didn’t go through the vending endpoint.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">activity</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/group_by.html" class="external-link">group_by</a></span><span class="op">(</span><span class="va">caller</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/group_by.html" class="external-link">group_by</a></span><span class="op">(</span><span class="va">caller_type</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/summarise.html" class="external-link">summarise</a></span><span class="op">(</span>requests <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/sum.html" class="external-link">sum</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span>, .groups <span class="op">=</span> <span class="st">"drop"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/slice.html" class="external-link">slice_max</a></span><span class="op">(</span><span class="va">requests</span>, n <span class="op">=</span> <span class="fl">12</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/ggplot.html" class="external-link">ggplot</a></span><span class="op">(</span><span class="fu"><a href="https://ggplot2.tidyverse.org/reference/aes.html" class="external-link">aes</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/stats/reorder.factor.html" class="external-link">reorder</a></span><span class="op">(</span><span class="va">caller</span>, <span class="va">requests</span><span class="op">)</span>, <span class="va">requests</span><span class="op">)</span><span class="op">)</span> <span class="op">+</span></span>
+<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/ggplot.html" class="external-link">ggplot</a></span><span class="op">(</span><span class="fu"><a href="https://ggplot2.tidyverse.org/reference/aes.html" class="external-link">aes</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/stats/reorder.factor.html" class="external-link">reorder</a></span><span class="op">(</span><span class="va">caller_type</span>, <span class="va">requests</span><span class="op">)</span>, <span class="va">requests</span><span class="op">)</span><span class="op">)</span> <span class="op">+</span></span>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/geom_bar.html" class="external-link">geom_col</a></span><span class="op">(</span>fill <span class="op">=</span> <span class="va">cori_colors</span><span class="op">[[</span><span class="st">"Mid Teal"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span> <span class="op">+</span></span>
-<span>  <span class="co"># Centered at each bar's own midpoint (requests / 2), not inset from the</span></span>
-<span>  <span class="co"># tip -- real traffic here is heavily skewed (anonymous vastly outweighs</span></span>
-<span>  <span class="co"># everything else), and a fixed tip-inset would overflow a short bar.</span></span>
-<span>  <span class="co"># Centering scales with each bar's own length regardless of skew.</span></span>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/geom_text.html" class="external-link">geom_text</a></span><span class="op">(</span></span>
 <span>    <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/aes.html" class="external-link">aes</a></span><span class="op">(</span>y <span class="op">=</span> <span class="va">requests</span> <span class="op">/</span> <span class="fl">2</span>, label <span class="op">=</span> <span class="fu">scales</span><span class="fu">::</span><span class="fu"><a href="https://scales.r-lib.org/reference/comma.html" class="external-link">comma</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>    color    <span class="op">=</span> <span class="st">"white"</span>,</span>
@@ -257,24 +284,51 @@ identity that simply didn’t go through the vending endpoint.</p>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/scale_continuous.html" class="external-link">scale_y_continuous</a></span><span class="op">(</span>labels <span class="op">=</span> <span class="fu"><a href="https://scales.r-lib.org/reference/label_number.html" class="external-link">label_comma</a></span><span class="op">(</span><span class="op">)</span><span class="op">)</span> <span class="op">+</span></span>
 <span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/labs.html" class="external-link">labs</a></span><span class="op">(</span></span>
 <span>    title    <span class="op">=</span> <span class="st">"Downloads by credential type"</span>,</span>
-<span>    subtitle <span class="op">=</span> <span class="st">"Parsed from the vended credential's session name"</span>,</span>
+<span>    subtitle <span class="op">=</span> <span class="st">"anonymous | tagged | local"</span>,</span>
 <span>    x <span class="op">=</span> <span class="cn">NULL</span>, y <span class="op">=</span> <span class="st">"Requests"</span></span>
 <span>  <span class="op">)</span> <span class="op">+</span></span>
 <span>  <span class="fu"><a href="https://ruralinnovation.github.io/cori.charts/reference/theme_cori_horizontal_bars.html" class="external-link">theme_cori_horizontal_bars</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
-<p><img src="monitoring-s3-access_files/figure-html/chart-by-caller-1.png" class="r-plt" alt="" width="3600"></p>
+<p><img src="monitoring-s3-access_files/figure-html/chart-by-caller-type-1.png" class="r-plt" alt="" width="3600"></p>
+<p>For a deeper look, drill down into individual caller IDs. Anonymous
+callers are grouped by an 8-character IP hash; tagged callers show their
+explicit tag.</p>
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">activity</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/filter.html" class="external-link">filter</a></span><span class="op">(</span><span class="op">!</span><span class="fu"><a href="https://rdrr.io/r/base/NA.html" class="external-link">is.na</a></span><span class="op">(</span><span class="va">caller_id</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/group_by.html" class="external-link">group_by</a></span><span class="op">(</span><span class="va">caller_type</span>, <span class="va">caller_id</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/summarise.html" class="external-link">summarise</a></span><span class="op">(</span>requests <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/sum.html" class="external-link">sum</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span>, .groups <span class="op">=</span> <span class="st">"drop"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/slice.html" class="external-link">slice_max</a></span><span class="op">(</span><span class="va">requests</span>, n <span class="op">=</span> <span class="fl">12</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/mutate.html" class="external-link">mutate</a></span><span class="op">(</span>label <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/paste.html" class="external-link">paste0</a></span><span class="op">(</span><span class="va">caller_type</span>, <span class="st">": "</span>, <span class="va">caller_id</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/ggplot.html" class="external-link">ggplot</a></span><span class="op">(</span><span class="fu"><a href="https://ggplot2.tidyverse.org/reference/aes.html" class="external-link">aes</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/stats/reorder.factor.html" class="external-link">reorder</a></span><span class="op">(</span><span class="va">label</span>, <span class="va">requests</span><span class="op">)</span>, <span class="va">requests</span><span class="op">)</span><span class="op">)</span> <span class="op">+</span></span>
+<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/geom_bar.html" class="external-link">geom_col</a></span><span class="op">(</span>fill <span class="op">=</span> <span class="va">cori_colors</span><span class="op">[[</span><span class="st">"Mid Teal"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span> <span class="op">+</span></span>
+<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/geom_text.html" class="external-link">geom_text</a></span><span class="op">(</span></span>
+<span>    <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/aes.html" class="external-link">aes</a></span><span class="op">(</span>y <span class="op">=</span> <span class="va">requests</span> <span class="op">/</span> <span class="fl">2</span>, label <span class="op">=</span> <span class="fu">scales</span><span class="fu">::</span><span class="fu"><a href="https://scales.r-lib.org/reference/comma.html" class="external-link">comma</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>    color    <span class="op">=</span> <span class="st">"white"</span>,</span>
+<span>    fontface <span class="op">=</span> <span class="st">"bold"</span>,</span>
+<span>    size     <span class="op">=</span> <span class="fl">3.5</span></span>
+<span>  <span class="op">)</span> <span class="op">+</span></span>
+<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/coord_flip.html" class="external-link">coord_flip</a></span><span class="op">(</span><span class="op">)</span> <span class="op">+</span></span>
+<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/scale_continuous.html" class="external-link">scale_y_continuous</a></span><span class="op">(</span>labels <span class="op">=</span> <span class="fu"><a href="https://scales.r-lib.org/reference/label_number.html" class="external-link">label_comma</a></span><span class="op">(</span><span class="op">)</span><span class="op">)</span> <span class="op">+</span></span>
+<span>  <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/labs.html" class="external-link">labs</a></span><span class="op">(</span></span>
+<span>    title    <span class="op">=</span> <span class="st">"Top callers by ID"</span>,</span>
+<span>    subtitle <span class="op">=</span> <span class="st">"IP hash (anonymous) or explicit tag (tagged)"</span>,</span>
+<span>    x <span class="op">=</span> <span class="cn">NULL</span>, y <span class="op">=</span> <span class="st">"Requests"</span></span>
+<span>  <span class="op">)</span> <span class="op">+</span></span>
+<span>  <span class="fu"><a href="https://ruralinnovation.github.io/cori.charts/reference/theme_cori_horizontal_bars.html" class="external-link">theme_cori_horizontal_bars</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
+<p><img src="monitoring-s3-access_files/figure-html/chart-by-caller-id-1.png" class="r-plt" alt="" width="3600"></p>
 </div>
 <div class="section level2">
 <h2 id="year-to-date-summary">Year-to-date summary<a class="anchor" aria-label="anchor" href="#year-to-date-summary"></a>
 </h2>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">activity</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/filter.html" class="external-link">filter</a></span><span class="op">(</span><span class="va">day</span> <span class="op">&gt;=</span> <span class="fu"><a href="https://rdrr.io/r/base/as.Date.html" class="external-link">as.Date</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/format.html" class="external-link">format</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.Date</a></span><span class="op">(</span><span class="op">)</span>, <span class="st">"%Y-01-01"</span><span class="op">)</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/group_by.html" class="external-link">group_by</a></span><span class="op">(</span><span class="va">bucket</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/summarise.html" class="external-link">summarise</a></span><span class="op">(</span></span>
-<span>    requests <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/sum.html" class="external-link">sum</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span>,</span>
-<span>    gb       <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/sum.html" class="external-link">sum</a></span><span class="op">(</span><span class="va">bytes</span>, na.rm <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span> <span class="op">/</span> <span class="fl">1024</span><span class="op">^</span><span class="fl">3</span>, <span class="fl">1</span><span class="op">)</span>,</span>
-<span>    callers  <span class="op">=</span> <span class="fu"><a href="https://dplyr.tidyverse.org/reference/n_distinct.html" class="external-link">n_distinct</a></span><span class="op">(</span><span class="va">caller</span><span class="op">)</span>,</span>
-<span>    .groups  <span class="op">=</span> <span class="st">"drop"</span></span>
+<span>    requests    <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/sum.html" class="external-link">sum</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span>,</span>
+<span>    gb          <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/sum.html" class="external-link">sum</a></span><span class="op">(</span><span class="va">bytes</span>, na.rm <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span> <span class="op">/</span> <span class="fl">1024</span><span class="op">^</span><span class="fl">3</span>, <span class="fl">1</span><span class="op">)</span>,</span>
+<span>    caller_ids  <span class="op">=</span> <span class="fu"><a href="https://dplyr.tidyverse.org/reference/n_distinct.html" class="external-link">n_distinct</a></span><span class="op">(</span><span class="va">caller_id</span>, na.rm <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span>,</span>
+<span>    .groups     <span class="op">=</span> <span class="st">"drop"</span></span>
 <span>  <span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="https://dplyr.tidyverse.org/reference/arrange.html" class="external-link">arrange</a></span><span class="op">(</span><span class="fu"><a href="https://dplyr.tidyverse.org/reference/desc.html" class="external-link">desc</a></span><span class="op">(</span><span class="va">requests</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu">knitr</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/pkg/knitr/man/kable.html" class="external-link">kable</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
@@ -283,44 +337,44 @@ identity that simply didn’t go through the vending endpoint.</p>
 <th align="left">bucket</th>
 <th align="right">requests</th>
 <th align="right">gb</th>
-<th align="right">callers</th>
+<th align="right">caller_ids</th>
 </tr></thead>
 <tbody>
 <tr class="odd">
 <td align="left">cori.data.fcc</td>
-<td align="right">460846</td>
-<td align="right">185.8</td>
-<td align="right">2</td>
+<td align="right">473000</td>
+<td align="right">164.4</td>
+<td align="right">0</td>
 </tr>
 <tr class="even">
 <td align="left">cori.data.qcew</td>
-<td align="right">15406</td>
-<td align="right">4.3</td>
-<td align="right">2</td>
+<td align="right">11013</td>
+<td align="right">2.3</td>
+<td align="right">1</td>
 </tr>
 <tr class="odd">
 <td align="left">cori.data.bds</td>
-<td align="right">2031</td>
-<td align="right">0.2</td>
-<td align="right">2</td>
+<td align="right">9433</td>
+<td align="right">1.2</td>
+<td align="right">0</td>
 </tr>
 <tr class="even">
 <td align="left">cori.data.pep</td>
-<td align="right">686</td>
-<td align="right">0.0</td>
-<td align="right">2</td>
+<td align="right">1766</td>
+<td align="right">0.1</td>
+<td align="right">0</td>
 </tr>
 <tr class="odd">
 <td align="left">ruraldefinitions</td>
-<td align="right">58</td>
-<td align="right">0.0</td>
-<td align="right">2</td>
+<td align="right">78</td>
+<td align="right">0.1</td>
+<td align="right">0</td>
 </tr>
 <tr class="even">
 <td align="left">cori.data.bps</td>
-<td align="right">16</td>
+<td align="right">17</td>
 <td align="right">0.0</td>
-<td align="right">1</td>
+<td align="right">0</td>
 </tr>
 </tbody>
 </table>
@@ -337,12 +391,11 @@ guaranteed nor provably complete, and latency means today’s activity is
 not visible yet. These numbers are a reliable picture of usage, not an
 audit trail — do not present them as a compliance artifact.</p>
 <p>In the raw log data, a vended session with no <code>caller</code> tag
-literally embeds <code>anon</code> in its session name (that’s the
-vending endpoint’s own fallback) – which is why the query above folds it
-into <code>anonymous</code> rather than treating “vended but untagged”
-as its own category. Passing a tag is what moves a request out of
-<code>anonymous</code> and into an attributable name:</p>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+embeds <code>coridata-anon-{ipHash}-{ts}</code> in its session name. The
+IP hash allows grouping repeat callers by origin without requiring
+identification. Passing a <code>caller</code> tag moves a request into
+the <code>tagged</code> category with an explicit identifier:</p>
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">con</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/connect_to_s3.html">connect_to_s3</a></span><span class="op">(</span><span class="st">"cori.data.qcew"</span>, caller <span class="op">=</span> <span class="st">"quarterly-refresh"</span><span class="op">)</span></span>
 <span><span class="fu">DBI</span><span class="fu">::</span><span class="fu"><a href="https://dbi.r-dbi.org/reference/dbDisconnect.html" class="external-link">dbDisconnect</a></span><span class="op">(</span><span class="va">con</span>, shutdown <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span></code></pre></div>
 </div>

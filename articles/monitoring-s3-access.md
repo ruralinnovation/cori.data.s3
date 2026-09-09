@@ -38,6 +38,7 @@ into memory.
 
 ``` r
 
+
 buckets <- c(
   "cori.data.bds",
   "cori.data.bfs",
@@ -61,24 +62,44 @@ query_template <- "
        'operation','key','status','err','bytes']) AS f
     FROM read_csv('%s', delim='\\x01', header = false,
                   columns = {'line': 'VARCHAR'})
+  ),
+  parsed AS (
+    SELECT
+      f.bucket                                                 AS bucket,
+      CAST(strptime(split_part(f.ts, ' ', 1),
+                    '%%d/%%b/%%Y:%%H:%%M:%%S') AS DATE)        AS day,
+      f.requester                                              AS requester,
+      split_part(f.requester, '/', 3)                          AS session_name,
+      TRY_CAST(f.bytes AS BIGINT)                              AS bytes
+    FROM raw
+    WHERE f.operation LIKE 'REST.GET.OBJECT%%'
   )
   SELECT
-    f.bucket                                                   AS bucket,
-    CAST(strptime(split_part(f.ts, ' ', 1),
-                  '%%d/%%b/%%Y:%%H:%%M:%%S') AS DATE)          AS day,
+    bucket,
+    day,
+    -- caller_type: for aggregating by credential category
     CASE
-      WHEN f.requester = '-' THEN 'anonymous'
-      WHEN f.requester LIKE '%%CoriDataS3ReaderRole%%'
-        THEN coalesce(nullif(nullif(regexp_extract(
-               split_part(f.requester, '/', 3),
-               '^coridata-(.*)-[0-9]+$', 1), ''), 'anon'), 'anonymous')
-      ELSE 'local credentials'
-    END                                                        AS caller,
+      WHEN requester = '-' THEN 'anonymous'
+      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'
+           AND session_name LIKE 'coridata-anon-%%'
+        THEN 'anonymous'
+      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'
+           AND session_name LIKE 'coridata-tag-%%'
+        THEN 'tagged'
+      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'
+        THEN 'anonymous'  -- legacy format fallback
+      ELSE 'local'
+    END                                                        AS caller_type,
+    -- caller_id: IP hash (anon) or explicit tag (tagged) for drill-down
+    CASE
+      WHEN requester LIKE '%%CoriDataS3ReaderRole%%'
+        THEN regexp_extract(session_name, '^coridata-(?:anon|tag)-([^-]+)-[0-9]+$', 1)
+      ELSE NULL
+    END                                                        AS caller_id,
     COUNT(*)                                                   AS requests,
-    SUM(TRY_CAST(f.bytes AS BIGINT))                           AS bytes
-  FROM raw
-  WHERE f.operation LIKE 'REST.GET.OBJECT%%'
-  GROUP BY 1, 2, 3
+    SUM(bytes)                                                 AS bytes
+  FROM parsed
+  GROUP BY 1, 2, 3, 4
 "
 
 activity <- list()
@@ -129,24 +150,27 @@ activity <- activity |>
   )
 
 glimpse(activity)
-#> Rows: 72
-#> Columns: 5
-#> $ bucket   <chr> "cori.data.bds", "cori.data.bds", "cori.data.bds", "cori.data…
-#> $ day      <date> 2026-08-24, 2026-08-25, 2026-08-26, 2026-08-27, 2026-08-28, …
-#> $ caller   <chr> "local credentials", "local credentials", "local credentials"…
-#> $ requests <dbl> 376, 190, 2, 563, 529, 2, 2, 2, 365, 2, 2, 2, 2, 2, 2, 2, 2, …
-#> $ bytes    <dbl> 36378558, 18205991, 736, 54567469, 48354171, 26, 736, 736, 34…
+#> Rows: 79
+#> Columns: 6
+#> $ bucket      <chr> "cori.data.bds", "cori.data.bds", "cori.data.bds", "cori.d…
+#> $ day         <date> 2026-09-02, 2026-09-03, 2026-09-04, 2026-09-04, 2026-09-0…
+#> $ caller_type <chr> "local", "local", "local", "anonymous", "local", "local", …
+#> $ caller_id   <chr> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA…
+#> $ requests    <dbl> 2, 2, 4761, 60, 3, 2, 37, 4, 3847, 2, 707, 6, 2, 2, 2, 3, …
+#> $ bytes       <dbl> 736, 736, 745036330, 780, 1104, 716, 19877407, 588, 390612…
 ```
 
-One row per bucket, day, and caller. Everything below is `dplyr` on that
-frame — the expensive work is already done.
+One row per bucket, day, caller type, and caller ID. Everything below is
+`dplyr` on that frame — the expensive work is already done.
 
 ## Downloads over time, by bucket
 
 ``` r
 
+
 activity |>
   filter(day >= Sys.Date() - 7) |>
+  filter(bucket != "cori.data.fcc") |>
   group_by(bucket, day) |>
   summarise(requests = sum(requests), .groups = "drop") |>
   ggplot(aes(day, requests, color = bucket)) +
@@ -155,7 +179,7 @@ activity |>
   scale_x_date(date_labels = "%b %d", date_breaks = "1 day") +
   scale_color_viridis_d(option = "turbo", begin = 0.1, end = 0.9) +
   labs(
-    title    = "S3 object downloads by bucket",
+    title    = "S3 object requests by bucket",
     subtitle = "Daily GET requests over the past week",
     x = NULL, y = "Requests", color = NULL
   ) +
@@ -167,33 +191,31 @@ activity |>
 ## Who is downloading
 
 The `requester` field carries the full assumed-role session ARN, and the
-session name is minted per credential as
-`coridata-<caller>-<timestamp>`. That is what the query above unpacks
-into `caller`.
+session name encodes both caller type and a stable identifier:
 
-`anonymous` deliberately combines two things that are technically
-different but mean the same thing for this report: a request with no
-credentials at all, and a vended credential nobody tagged with a
-`caller`. Both answer “who did this?” with nothing. That’s the question
-this report exists to answer, so the two collapse into one number rather
-than being split by a technical distinction (had a credential
-vs. didn’t) that doesn’t matter here. On the seven public buckets,
-`anonymous` is usually the bulk of the traffic. `local credentials` is a
-separate, real category: a known AWS identity that simply didn’t go
-through the vending endpoint.
+- `coridata-anon-{ipHash}-{ts}` — anonymous caller with IP-based
+  fingerprint
+- `coridata-tag-{callerId}-{ts}` — tagged caller with explicit
+  identifier
+
+The query unpacks these into two columns: `caller_type` for aggregation
+(`anonymous`, `tagged`, or `local`) and `caller_id` for drill-down (the
+IP hash or explicit tag).
+
+`anonymous` deliberately combines requests with no credentials at all
+and vended credentials without a `caller` tag. Both answer “who did
+this?” with nothing — the distinction (had a credential vs. didn’t)
+doesn’t matter for attribution. On the public buckets, `anonymous` is
+usually the bulk of the traffic. `local` is a separate category: a known
+AWS identity that didn’t go through the vending endpoint.
 
 ``` r
 
 activity |>
-  group_by(caller) |>
+  group_by(caller_type) |>
   summarise(requests = sum(requests), .groups = "drop") |>
-  slice_max(requests, n = 12) |>
-  ggplot(aes(reorder(caller, requests), requests)) +
+  ggplot(aes(reorder(caller_type, requests), requests)) +
   geom_col(fill = cori_colors[["Mid Teal"]]) +
-  # Centered at each bar's own midpoint (requests / 2), not inset from the
-  # tip -- real traffic here is heavily skewed (anonymous vastly outweighs
-  # everything else), and a fixed tip-inset would overflow a short bar.
-  # Centering scales with each bar's own length regardless of skew.
   geom_text(
     aes(y = requests / 2, label = scales::comma(requests)),
     color    = "white",
@@ -204,13 +226,45 @@ activity |>
   scale_y_continuous(labels = label_comma()) +
   labs(
     title    = "Downloads by credential type",
-    subtitle = "Parsed from the vended credential's session name",
+    subtitle = "anonymous | tagged | local",
     x = NULL, y = "Requests"
   ) +
   theme_cori_horizontal_bars()
 ```
 
-![](monitoring-s3-access_files/figure-html/chart-by-caller-1.png)
+![](monitoring-s3-access_files/figure-html/chart-by-caller-type-1.png)
+
+For a deeper look, drill down into individual caller IDs. Anonymous
+callers are grouped by an 8-character IP hash; tagged callers show their
+explicit tag.
+
+``` r
+
+activity |>
+  filter(!is.na(caller_id)) |>
+  group_by(caller_type, caller_id) |>
+  summarise(requests = sum(requests), .groups = "drop") |>
+  slice_max(requests, n = 12) |>
+  mutate(label = paste0(caller_type, ": ", caller_id)) |>
+  ggplot(aes(reorder(label, requests), requests)) +
+  geom_col(fill = cori_colors[["Mid Teal"]]) +
+  geom_text(
+    aes(y = requests / 2, label = scales::comma(requests)),
+    color    = "white",
+    fontface = "bold",
+    size     = 3.5
+  ) +
+  coord_flip() +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title    = "Top callers by ID",
+    subtitle = "IP hash (anonymous) or explicit tag (tagged)",
+    x = NULL, y = "Requests"
+  ) +
+  theme_cori_horizontal_bars()
+```
+
+![](monitoring-s3-access_files/figure-html/chart-by-caller-id-1.png)
 
 ## Year-to-date summary
 
@@ -220,23 +274,23 @@ activity |>
   filter(day >= as.Date(format(Sys.Date(), "%Y-01-01"))) |>
   group_by(bucket) |>
   summarise(
-    requests = sum(requests),
-    gb       = round(sum(bytes, na.rm = TRUE) / 1024^3, 1),
-    callers  = n_distinct(caller),
-    .groups  = "drop"
+    requests    = sum(requests),
+    gb          = round(sum(bytes, na.rm = TRUE) / 1024^3, 1),
+    caller_ids  = n_distinct(caller_id, na.rm = TRUE),
+    .groups     = "drop"
   ) |>
   arrange(desc(requests)) |>
   knitr::kable()
 ```
 
-| bucket           | requests |    gb | callers |
-|:-----------------|---------:|------:|--------:|
-| cori.data.fcc    |   460846 | 185.8 |       2 |
-| cori.data.qcew   |    15406 |   4.3 |       2 |
-| cori.data.bds    |     2031 |   0.2 |       2 |
-| cori.data.pep    |      686 |   0.0 |       2 |
-| ruraldefinitions |       58 |   0.0 |       2 |
-| cori.data.bps    |       16 |   0.0 |       1 |
+| bucket           | requests |    gb | caller_ids |
+|:-----------------|---------:|------:|-----------:|
+| cori.data.fcc    |   473000 | 164.4 |          0 |
+| cori.data.qcew   |    11013 |   2.3 |          1 |
+| cori.data.bds    |     9433 |   1.2 |          0 |
+| cori.data.pep    |     1766 |   0.1 |          0 |
+| ruraldefinitions |       78 |   0.1 |          0 |
+| cori.data.bps    |       17 |   0.0 |          0 |
 
 Swap the [`filter()`](https://dplyr.tidyverse.org/reference/filter.html)
 for `day >= Sys.Date() - 90` to get the trailing ninety days instead.
@@ -249,12 +303,11 @@ guaranteed nor provably complete, and latency means today’s activity is
 not visible yet. These numbers are a reliable picture of usage, not an
 audit trail — do not present them as a compliance artifact.
 
-In the raw log data, a vended session with no `caller` tag literally
-embeds `anon` in its session name (that’s the vending endpoint’s own
-fallback) – which is why the query above folds it into `anonymous`
-rather than treating “vended but untagged” as its own category. Passing
-a tag is what moves a request out of `anonymous` and into an
-attributable name:
+In the raw log data, a vended session with no `caller` tag embeds
+`coridata-anon-{ipHash}-{ts}` in its session name. The IP hash allows
+grouping repeat callers by origin without requiring identification.
+Passing a `caller` tag moves a request into the `tagged` category with
+an explicit identifier:
 
 ``` r
 
