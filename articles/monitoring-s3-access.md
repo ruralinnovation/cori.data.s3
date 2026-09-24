@@ -150,14 +150,14 @@ activity <- activity |>
   )
 
 glimpse(activity)
-#> Rows: 79
+#> Rows: 86
 #> Columns: 6
 #> $ bucket      <chr> "cori.data.bds", "cori.data.bds", "cori.data.bds", "cori.d…
-#> $ day         <date> 2026-09-02, 2026-09-03, 2026-09-04, 2026-09-04, 2026-09-0…
-#> $ caller_type <chr> "local", "local", "local", "anonymous", "local", "local", …
+#> $ day         <date> 2026-09-17, 2026-09-17, 2026-09-18, 2026-09-18, 2026-09-1…
+#> $ caller_type <chr> "local", "anonymous", "local", "anonymous", "local", "loca…
 #> $ caller_id   <chr> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA…
-#> $ requests    <dbl> 2, 2, 4761, 60, 3, 2, 37, 4, 3847, 2, 707, 6, 2, 2, 2, 3, …
-#> $ bytes       <dbl> 736, 736, 745036330, 780, 1104, 716, 19877407, 588, 390612…
+#> $ requests    <dbl> 13324, 53, 43906, 182, 2, 2, 2, 2, 2, 11961, 1, 110, 4, 2,…
+#> $ bytes       <dbl> 1246958222, 689, 3811454918, 3397474, 716, 716, 736, 582, …
 ```
 
 One row per bucket, day, caller type, and caller ID. Everything below is
@@ -170,7 +170,7 @@ One row per bucket, day, caller type, and caller ID. Everything below is
 
 activity |>
   filter(day >= Sys.Date() - 7) |>
-  filter(bucket != "cori.data.fcc") |>
+  # filter(bucket != "cori.data.fcc") |>
   group_by(bucket, day) |>
   summarise(requests = sum(requests), .groups = "drop") |>
   ggplot(aes(day, requests, color = bucket)) +
@@ -285,12 +285,14 @@ activity |>
 
 | bucket           | requests |    gb | caller_ids |
 |:-----------------|---------:|------:|-----------:|
-| cori.data.fcc    |   473000 | 164.4 |          0 |
-| cori.data.qcew   |    11013 |   2.3 |          1 |
-| cori.data.bds    |     9433 |   1.2 |          0 |
-| cori.data.pep    |     1766 |   0.1 |          0 |
-| ruraldefinitions |       78 |   0.1 |          0 |
-| cori.data.bps    |       17 |   0.0 |          0 |
+| cori.data.fcc    |   371756 | 127.1 |          0 |
+| cori.data.bds    |    69547 |   6.2 |          0 |
+| cori.data.qcew   |    12651 |   1.8 |          1 |
+| cori.data.pep    |    11591 |   0.4 |          2 |
+| cori.data.bps    |       41 |   0.0 |          1 |
+| ruraldefinitions |       40 |   0.0 |          0 |
+| cori.data.bfs    |        6 |   0.0 |          0 |
+| cori.data.hu     |        5 |   0.0 |          0 |
 
 Swap the [`filter()`](https://dplyr.tidyverse.org/reference/filter.html)
 for `day >= Sys.Date() - 90` to get the trailing ninety days instead.
