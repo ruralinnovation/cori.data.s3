@@ -180,7 +180,7 @@ One row per bucket, day, caller type, and caller ID. Everything below is
 
 activity |>
   filter(day >= Sys.Date() - 7) |>
-  filter(bucket != "cori.data.fcc") |>
+  # filter(bucket != "cori.data.fcc") |>
   group_by(bucket, day) |>
   summarise(requests = sum(requests), .groups = "drop") |>
   ggplot(aes(day, requests, color = bucket)) +
