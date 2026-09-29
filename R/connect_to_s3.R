@@ -94,7 +94,9 @@ has_local_aws_credentials <- function() {
 #' 1. If [has_local_aws_credentials()] finds credentials in the environment
 #'    or `~/.aws/credentials`, the connection uses the caller's own identity
 #'    via `PROVIDER CONFIG`, with the credentials resolved in R by
-#'    `paws.common::locate_credentials()` — no network round-trip.
+#'    `paws.common::locate_credentials()` — no network round-trip. (Changed
+#'    from `PROVIDER CREDENTIAL_CHAIN`, which needed the `aws` DuckDB
+#'    extension; that extension is not published for Windows R.)
 #' 2. Otherwise, short-lived read-only credentials for `bucket` are fetched
 #'    from `vending_url` and installed directly as a static secret.
 #'
@@ -166,8 +168,17 @@ connect_to_s3 <- function(bucket, region = "us-east-1",
     # need the `aws` extension, which has no windows_amd64_mingw build
     # (duckdb-aws CI deliberately excludes that platform), so it is
     # unavailable to the duckdb R package on Windows.
+    #
+    # NOTE: paws.common::locate_credentials() is new here. It replaces the
+    # previous `PROVIDER CREDENTIAL_CHAIN, CHAIN 'env;config'` secret and
+    # is the only place this package resolves credentials in R for DuckDB.
+    # Unlike the old chain it also honours AWS_PROFILE and can return
+    # SSO/instance-role credentials.
     creds <- paws.common::locate_credentials()
 
+    # Added with the switch to locate_credentials(): resolution now happens
+    # in R, so an unresolvable result would otherwise reach sprintf() as
+    # NULL fields and fail with an unclear empty-query error.
     if (is.null(creds) || !is.character(creds$access_key_id) ||
         !nzchar(creds$access_key_id) ||
         !is.character(creds$secret_access_key) ||
