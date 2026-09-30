@@ -93,7 +93,10 @@ has_local_aws_credentials <- function() {
 #'
 #' 1. If [has_local_aws_credentials()] finds credentials in the environment
 #'    or `~/.aws/credentials`, the connection uses the caller's own identity
-#'    via `PROVIDER CREDENTIAL_CHAIN` — no network round-trip.
+#'    via `PROVIDER CONFIG`, with the credentials resolved in R by
+#'    `paws.common::locate_credentials()` — no network round-trip. (Changed
+#'    from `PROVIDER CREDENTIAL_CHAIN`, which needed the `aws` DuckDB
+#'    extension; that extension is not published for Windows R.)
 #' 2. Otherwise, short-lived read-only credentials for `bucket` are fetched
 #'    from `vending_url` and installed directly as a static secret.
 #'
@@ -156,27 +159,59 @@ connect_to_s3 <- function(bucket, region = "us-east-1",
   con <- DBI::dbConnect(duckdb::duckdb(), dbdir = dbdir)
 
   DBI::dbExecute(con, "INSTALL httpfs; LOAD httpfs;")
-  DBI::dbExecute(con, "INSTALL aws;   LOAD aws;")
   DBI::dbExecute(con, "SET http_timeout = 300;")
 
   if (has_local_aws_credentials()) {
     # Caller already has AWS credentials configured (env vars or
-    # ~/.aws/credentials) -- use their own identity via the standard chain,
-    # no round-trip to the vending endpoint needed.
+    # ~/.aws/credentials) -- resolve them ourselves and hand DuckDB the
+    # values directly via PROVIDER CONFIG. PROVIDER CREDENTIAL_CHAIN would
+    # need the `aws` extension, which has no windows_amd64_mingw build
+    # (duckdb-aws CI deliberately excludes that platform), so it is
+    # unavailable to the duckdb R package on Windows.
+    #
+    # NOTE: paws.common::locate_credentials() is new here. It replaces the
+    # previous `PROVIDER CREDENTIAL_CHAIN, CHAIN 'env;config'` secret and
+    # is the only place this package resolves credentials in R for DuckDB.
+    # Unlike the old chain it also honours AWS_PROFILE and can return
+    # SSO/instance-role credentials.
+    creds <- paws.common::locate_credentials()
+
+    # Added with the switch to locate_credentials(): resolution now happens
+    # in R, so an unresolvable result would otherwise reach sprintf() as
+    # NULL fields and fail with an unclear empty-query error.
+    if (is.null(creds) || !is.character(creds$access_key_id) ||
+        !nzchar(creds$access_key_id) ||
+        !is.character(creds$secret_access_key) ||
+        !nzchar(creds$secret_access_key)) {
+      DBI::dbDisconnect(con, shutdown = TRUE)
+      stop("Local AWS credentials were detected but could not be resolved. ",
+           "Check AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY or ",
+           "~/.aws/credentials.", call. = FALSE)
+    }
+
+    # Long-lived IAM user keys have no session token; only emit the field
+    # when there is one.
+    session_token <- ""
+    if (is.character(creds$session_token) && nzchar(creds$session_token)) {
+      session_token <- sprintf("SESSION_TOKEN '%s',", creds$session_token)
+    }
+
     DBI::dbExecute(con, sprintf("CREATE OR REPLACE SECRET s3_secret (
       TYPE S3,
-      PROVIDER CREDENTIAL_CHAIN,
-      CHAIN 'env;config',
+      PROVIDER CONFIG,
+      KEY_ID '%s',
+      SECRET '%s',
+      %s
       REGION '%s',
       URL_STYLE 'path'
-    );", region))
+    );", creds$access_key_id, creds$secret_access_key, session_token, region))
 
-  } else if (require_local) {
-    DBI::dbDisconnect(con, shutdown = TRUE)
-    stop("No local AWS credentials found. Vended credentials are read-only ",
-         "(across the allowlisted cori.data.* buckets), so this operation ",
-         "requires local AWS credentials. Run set_aws_credentials() or ",
-         "configure the AWS CLI.", call. = FALSE)
+  # } else if (require_local) {
+  #   DBI::dbDisconnect(con, shutdown = TRUE)
+  #   stop("No local AWS credentials found. Vended credentials are read-only ",
+  #        "(across the allowlisted cori.data.* buckets), so this operation ",
+  #        "requires local AWS credentials. Run set_aws_credentials() or ",
+  #        "configure the AWS CLI.", call. = FALSE)
 
   } else {
     # No local credentials -- fetch short-lived, read-only temporary

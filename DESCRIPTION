@@ -14,6 +14,7 @@ Imports:
   DBI,
   duckdb,
   httr,
+  paws.common,
   paws.security.identity,
   paws.storage,
   utils
