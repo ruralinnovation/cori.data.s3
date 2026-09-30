@@ -67,7 +67,10 @@ Credentials are resolved in two ways, in order:
 \enumerate{
 \item If \code{\link[=has_local_aws_credentials]{has_local_aws_credentials()}} finds credentials in the environment
 or \verb{~/.aws/credentials}, the connection uses the caller's own identity
-via \verb{PROVIDER CREDENTIAL_CHAIN} — no network round-trip.
+via \verb{PROVIDER CONFIG}, with the credentials resolved in R by
+\code{paws.common::locate_credentials()} — no network round-trip. (Changed
+from \verb{PROVIDER CREDENTIAL_CHAIN}, which needed the \code{aws} DuckDB
+extension; that extension is not published for Windows R.)
 \item Otherwise, short-lived read-only credentials for \code{bucket} are fetched
 from \code{vending_url} and installed directly as a static secret.
 }

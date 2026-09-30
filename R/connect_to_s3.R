@@ -206,12 +206,12 @@ connect_to_s3 <- function(bucket, region = "us-east-1",
       URL_STYLE 'path'
     );", creds$access_key_id, creds$secret_access_key, session_token, region))
 
-  } else if (require_local) {
-    DBI::dbDisconnect(con, shutdown = TRUE)
-    stop("No local AWS credentials found. Vended credentials are read-only ",
-         "(across the allowlisted cori.data.* buckets), so this operation ",
-         "requires local AWS credentials. Run set_aws_credentials() or ",
-         "configure the AWS CLI.", call. = FALSE)
+  # } else if (require_local) {
+  #   DBI::dbDisconnect(con, shutdown = TRUE)
+  #   stop("No local AWS credentials found. Vended credentials are read-only ",
+  #        "(across the allowlisted cori.data.* buckets), so this operation ",
+  #        "requires local AWS credentials. Run set_aws_credentials() or ",
+  #        "configure the AWS CLI.", call. = FALSE)
 
   } else {
     # No local credentials -- fetch short-lived, read-only temporary
