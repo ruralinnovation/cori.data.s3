@@ -120,7 +120,10 @@ must disconnect it, e.g. <code>on.exit(DBI::dbDisconnect(con, shutdown = TRUE))<
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
     <p>Credentials are resolved in two ways, in order:</p><ol><li><p>If <code><a href="has_local_aws_credentials.html">has_local_aws_credentials()</a></code> finds credentials in the environment
 or <code>~/.aws/credentials</code>, the connection uses the caller's own identity
-via <code>PROVIDER CREDENTIAL_CHAIN</code> — no network round-trip.</p></li>
+via <code>PROVIDER CONFIG</code>, with the credentials resolved in R by
+<code><a href="https://paws-r.r-universe.dev/paws.common/reference/locate_credentials.html" class="external-link">paws.common::locate_credentials()</a></code> — no network round-trip. (Changed
+from <code>PROVIDER CREDENTIAL_CHAIN</code>, which needed the <code>aws</code> DuckDB
+extension; that extension is not published for Windows R.)</p></li>
 <li><p>Otherwise, short-lived read-only credentials for <code>bucket</code> are fetched
 from <code>vending_url</code> and installed directly as a static secret.</p></li>
 </ol><p><code>bucket</code> is only used for the vending path, where the endpoint requires

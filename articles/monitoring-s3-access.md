@@ -150,14 +150,14 @@ activity <- activity |>
   )
 
 glimpse(activity)
-#> Rows: 86
+#> Rows: 94
 #> Columns: 6
 #> $ bucket      <chr> "cori.data.bds", "cori.data.bds", "cori.data.bds", "cori.d…
-#> $ day         <date> 2026-09-17, 2026-09-17, 2026-09-18, 2026-09-18, 2026-09-1…
-#> $ caller_type <chr> "local", "anonymous", "local", "anonymous", "local", "loca…
+#> $ day         <date> 2026-09-23, 2026-09-23, 2026-09-24, 2026-09-24, 2026-09-2…
+#> $ caller_type <chr> "local", "anonymous", "anonymous", "local", "local", "loca…
 #> $ caller_id   <chr> NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA…
-#> $ requests    <dbl> 13324, 53, 43906, 182, 2, 2, 2, 2, 2, 11961, 1, 110, 4, 2,…
-#> $ bytes       <dbl> 1246958222, 689, 3811454918, 3397474, 716, 716, 736, 582, …
+#> $ requests    <dbl> 11961, 1, 15, 3664, 2, 5612, 2, 2, 2, 2, 1, 4, 6, 84, 2, 2…
+#> $ bytes       <dbl> 1533770533, 13, 195, 409370200, 716, 554754297, 736, 716, …
 ```
 
 One row per bucket, day, caller type, and caller ID. Everything below is
@@ -283,16 +283,16 @@ activity |>
   knitr::kable()
 ```
 
-| bucket           | requests |    gb | caller_ids |
-|:-----------------|---------:|------:|-----------:|
-| cori.data.fcc    |   371756 | 127.1 |          0 |
-| cori.data.bds    |    69547 |   6.2 |          0 |
-| cori.data.qcew   |    12651 |   1.8 |          1 |
-| cori.data.pep    |    11591 |   0.4 |          2 |
-| cori.data.bps    |       41 |   0.0 |          1 |
-| ruraldefinitions |       40 |   0.0 |          0 |
-| cori.data.bfs    |        6 |   0.0 |          0 |
-| cori.data.hu     |        5 |   0.0 |          0 |
+| bucket           | requests |   gb | caller_ids |
+|:-----------------|---------:|-----:|-----------:|
+| cori.data.fcc    |    48632 | 16.3 |          0 |
+| cori.data.bds    |    21264 |  2.3 |          0 |
+| cori.data.qcew   |     8357 |  1.6 |          4 |
+| cori.data.pep    |     3368 |  0.1 |          2 |
+| cori.data.bfs    |      105 |  0.0 |          0 |
+| ruraldefinitions |       21 |  0.0 |          0 |
+| cori.data.hu     |       16 |  0.0 |          0 |
+| cori.data.bps    |       15 |  0.0 |          0 |
 
 Swap the [`filter()`](https://dplyr.tidyverse.org/reference/filter.html)
 for `day >= Sys.Date() - 90` to get the trailing ninety days instead.

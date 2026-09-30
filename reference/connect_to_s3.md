@@ -83,8 +83,12 @@ Credentials are resolved in two ways, in order:
 1.  If
     [`has_local_aws_credentials()`](https://ruralinnovation.github.io/cori.data.s3/reference/has_local_aws_credentials.md)
     finds credentials in the environment or `~/.aws/credentials`, the
-    connection uses the caller's own identity via
-    `PROVIDER CREDENTIAL_CHAIN` — no network round-trip.
+    connection uses the caller's own identity via `PROVIDER CONFIG`,
+    with the credentials resolved in R by
+    [`paws.common::locate_credentials()`](https://paws-r.r-universe.dev/paws.common/reference/locate_credentials.html)
+    — no network round-trip. (Changed from `PROVIDER CREDENTIAL_CHAIN`,
+    which needed the `aws` DuckDB extension; that extension is not
+    published for Windows R.)
 
 2.  Otherwise, short-lived read-only credentials for `bucket` are
     fetched from `vending_url` and installed directly as a static
